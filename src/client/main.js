@@ -15,6 +15,7 @@ import { mashString, randCreate } from 'glov/common/rand_alea.js';
 import { ridx } from 'glov/common/util.js';
 import {
   v2addScale,
+  v2copy,
   v2dist,
   v2iNormalize,
   v2iRound,
@@ -173,6 +174,8 @@ function cmpID(a, b) {
   return a.id < b.id ? -1 : 1;
 }
 
+let delta = vec2();
+
 class Game {
 
   addEnt(ent) {
@@ -207,7 +210,7 @@ class Game {
     this.packets = [];
     this.last_id = 0;
     this.round_robin_id = 0;
-    this.links_dirty = true;
+    this.paths_dirty = true;
 
     this.addEnt({
       type: TYPE_FACTORY,
@@ -310,7 +313,23 @@ class Game {
     }
   }
 
+  nextStep(from_id, to_id) {
+    let paths = this.getPaths();
+    while (true) {
+      let path = paths[from_id][to_id];
+      if (!path) {
+        return 0;
+      }
+      if (path[1] === null) {
+        return to_id;
+      }
+      to_id = path[1];
+    }
+  }
+
   emitSupply(source, target) {
+    let next_id = this.nextStep(source.id, target.id);
+    assert(next_id);
     source.supply--;
     this.packets.push({
       x: source.x,
@@ -320,8 +339,9 @@ class Game {
       w: 5, h: 5,
       source,
       target,
+      next: this.map[next_id],
       speed: PACKET_SPEED,
-      pos: [source.x, source.y],
+      pos: vec2(source.x, source.y),
     });
   }
 
@@ -339,10 +359,10 @@ class Game {
   }
 
   getPaths() {
-    if (!this.links_dirty) {
+    if (!this.paths_dirty) {
       return this.paths;
     }
-    this.links_dirty = false;
+    this.paths_dirty = false;
     let { map, supply_links } = this;
     let paths = [];
     let keys = [];
@@ -365,6 +385,10 @@ class Game {
     }
     for (let pivot_i = 0; pivot_i < keys.length; ++pivot_i) {
       let pivot = keys[pivot_i];
+      let pivot_ent = map[pivot];
+      if (!pivot_ent.active) {
+        continue;
+      }
       for (let ii_i = 0; ii_i < keys.length; ++ii_i) {
         let ii = keys[ii_i];
         if (pivot === ii) {
@@ -435,21 +459,45 @@ class Game {
     ent.frame = ent_types[ent.type].frame;
     if (ent.type === TYPE_MINER) {
       this.activateMiner(ent);
+    } else if (ent.type === TYPE_ROUTER) {
+      this.paths_dirty = true;
+    }
+    if (ent.max_links > 1) {
+      // supply passes through us
+      this.reorderSupply();
     }
   }
 
   updatePacket(packet, dt) {
-    let { speed, target, source, pos } = packet;
+    let { map } = this;
+    let { speed, target, source, next, pos } = packet;
     let dist = dt * speed;
-    let dist_needed = v2dist(pos, target.pos);
-    if (!packet.delta) {
-      packet.delta = v2iNormalize(v2sub(vec2(), target.pos, source.pos));
-    }
-    if (dist < dist_needed) {
-      v2addScale(pos, pos, packet.delta, dist);
-      packet.x = pos[0];
-      packet.y = pos[1];
-      return false;
+    while (true) {
+      let dist_needed = v2dist(pos, next.pos);
+      if (dist >= dist_needed) {
+        // arrived at next node, advance
+        v2copy(pos, next.pos);
+        dist -= dist_needed;
+        if (next === target) {
+          break;
+        }
+        packet.source = source = next;
+        let next_id = this.nextStep(source.id, target.id);
+        if (!next_id) {
+          // no longer has a link, I guess, just delete itself
+          if (engine.DEBUG) {
+            assert(false); // clean up elsewhere?
+          }
+          return true;
+        }
+        packet.next = next = map[next_id];
+      } else {
+        v2iNormalize(v2sub(delta, next.pos, source.pos));
+        v2addScale(pos, pos, delta, dist);
+        packet.x = pos[0];
+        packet.y = pos[1];
+        return false;
+      }
     }
 
     // arrived!
@@ -480,6 +528,16 @@ class Game {
       ent.supply_max && ent.supply < ent.supply_max && !ent.supply_source &&
         !(post_packet && ent.supply > ent.supply_max - 1)
     );
+  }
+
+  reorderSupply() {
+    let { map } = this;
+    for (let key in map) {
+      let ent = map[key];
+      if (this.needsSupply(ent, true)) {
+        this.pullSupply(ent);
+      }
+    }
   }
 
   every10Seconds() {
@@ -699,7 +757,7 @@ class Game {
       } else {
         // must be supply link
         this.supply_links.push([id, ent.id, sqrt(dist_sq)]);
-        this.links_dirty = true;
+        this.paths_dirty = true;
       }
     });
     if (selected === TYPE_MINER) {

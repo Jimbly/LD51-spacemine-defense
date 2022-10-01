@@ -6,6 +6,7 @@ local_storage.setStoragePrefix('glovjs-playground'); // Before requiring anythin
 import assert from 'assert';
 import * as camera2d from 'glov/client/camera2d.js';
 import * as engine from 'glov/client/engine.js';
+import { fontStyle } from 'glov/client/font.js';
 import * as input from 'glov/client/input.js';
 import * as net from 'glov/client/net.js';
 import * as pico8 from 'glov/client/pico8.js';
@@ -43,6 +44,9 @@ import {
   FRAME_FACTORY_BUILDING,
   FRAME_FACTORY_EMPTY,
   FRAME_FACTORY_READY,
+  FRAME_LASER,
+  FRAME_LASER_BUILDING,
+  FRAME_LASER_EMPTY,
   FRAME_MINER,
   FRAME_MINERDONE,
   FRAME_MINERUL,
@@ -60,6 +64,7 @@ const TYPE_MINER = 'miner';
 const TYPE_ASTEROID = 'asteroid';
 const TYPE_FACTORY = 'factory';
 const TYPE_ROUTER = 'router';
+const TYPE_LASER = 'laser';
 
 const PACKET_SPEED = 100/1000; // pixels per millisecond
 const SUPPLY_EMIT_TIME = 250;
@@ -74,6 +79,7 @@ Z[FRAME_ASTEROID] = 10;
 Z.LINKS = 15;
 Z[FRAME_ROUTER] = 20;
 Z.SUPPLY = 25;
+Z[FRAME_LASER] = 30;
 Z[FRAME_MINERDONE] = 30;
 Z[FRAME_MINER] = 30;
 Z[FRAME_MINERUP] = 35;
@@ -176,6 +182,19 @@ const ent_types = {
     max_links: 5,
     hp: 20,
   },
+  [TYPE_LASER]: {
+    type: TYPE_LASER,
+    frame: FRAME_LASER,
+    frame_building: FRAME_LASER_BUILDING,
+    frame_nosupply: FRAME_LASER_EMPTY,
+    label: 'Laser',
+    cost: 500,
+    cost_supply: 5,
+    supply_max: 10,
+    r: RADIUS_DEFAULT,
+    max_links: 1,
+    hp: 100,
+  },
   [TYPE_ASTEROID]: {
     frame: FRAME_ASTEROID,
     max_links: 0,
@@ -186,6 +205,7 @@ const buttons = [
   TYPE_FACTORY,
   TYPE_MINER,
   TYPE_ROUTER,
+  TYPE_LASER,
 ];
 
 const link_color_supply = [pico8.colors[9], pico8.colors[4]];
@@ -231,6 +251,18 @@ function desiredRot(enemy, ent) {
   return atan2(dx, -dy);
 }
 
+let style_cannot_afford = fontStyle(null, {
+  color: pico8.font_colors[8],
+  outline_color: 0x000000ff,
+  outline_width: 4,
+});
+let style_selected = fontStyle(null, {
+  color: pico8.font_colors[10],
+  outline_color: 0x000000ff,
+  outline_width: 4,
+});
+
+
 class Game {
 
   addEnt(ent) {
@@ -263,6 +295,7 @@ class Game {
     let h = this.h = game_height - PAD_TOP - PAD_BOTTOM;
     let rand = this.rand = randCreate(mashString(seed));
     let num_asteroids = 100;
+    this.game_over = false;
     this.map = {};
     this.supply_links = [];
     this.packets = [];
@@ -299,7 +332,7 @@ class Game {
     }
     this.value_mined = 0;
     this.total_value = total_value;
-    this.money = 500;
+    this.money = 450;
     this.selected = null;
     this.tick_counter = 0;
     this.decaseconds = 0;
@@ -309,6 +342,7 @@ class Game {
       this.paused = false;
       // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
+      this.money = 20000;
     }
   }
 
@@ -390,6 +424,16 @@ class Game {
     }
     if (this.selected_ent === ent) {
       this.selected_ent = null;
+    }
+    for (let key in map) {
+      let other = map[key];
+      if (other.orders) {
+        for (let ii = other.orders.length - 1; ii >= 0; --ii) {
+          if (other.orders[ii] === ent) {
+            other.orders.splice(ii, 1);
+          }
+        }
+      }
     }
   }
 
@@ -482,7 +526,11 @@ class Game {
 
   emitSupply(source, target) {
     let next_id = this.nextStep(source.id, target.id);
-    assert(next_id);
+    if (!next_id) {
+      // must be no longer connected
+      target.supply_enroute = false;
+      return;
+    }
     source.supply--;
     if (!source.supply) {
       source.frame = ent_types[source.type].frame_empty;
@@ -612,14 +660,18 @@ class Game {
 
   buildingFinished(ent) {
     ent.building = null;
-    ent.frame = ent_types[ent.type].frame;
+    let ent_type = ent_types[ent.type];
+    ent.frame = ent_type.frame;
     if (ent.type === TYPE_MINER) {
       this.activateMiner(ent);
     } else if (ent.type === TYPE_ROUTER) {
       this.paths_dirty = true;
     }
     if (ent.supply_source) {
-      ent.frame = ent_types[ent.type].frame_empty;
+      ent.frame = ent_type.frame_empty;
+    }
+    if (ent_type.frame_nosupply) {
+      ent.frame = ent_type.frame_nosupply;
     }
     if (ent.max_links > 1) {
       // supply passes through us
@@ -673,6 +725,9 @@ class Game {
       target.supply = min(target.supply + 1, target.supply_max);
       if (target.type === TYPE_MINER) {
         this.activateMiner(target);
+      }
+      if (ent_types[target.type].frame_nosupply) {
+        target.frame = ent_types[target.type].frame;
       }
     }
     if (this.needsSupply(target, true)) {
@@ -736,6 +791,9 @@ class Game {
   }
 
   spawnWave() {
+    if (this.game_over) {
+      return;
+    }
     this.spawn_wave = false;
     let { enemies, w, h } = this;
     let direction = this.rand.random() * PI * 2;
@@ -743,7 +801,7 @@ class Game {
     // TODO: announce!
     let dist = game_width / 4;
     for (let ii = 0; ii < count; ++ii) {
-      direction += (this.rand.random() - 0.5) * 20;
+      direction += (this.rand.random() - 0.5) * 0.5;
       let cosd = cos(direction);
       let sind = sin(direction);
       let e = {
@@ -798,45 +856,47 @@ class Game {
     if (!target) {
       enemy.target_id = this.enemyFindTarget(enemy);
       if (!enemy.target_id) {
-        this.paused = true;
-        return;
+        this.game_over = true;
+        // this.paused = true;
+        // return;
       }
       target = this.map[enemy.target_id];
     }
-    let desired_rot = desiredRot(enemy, target);
-    if (enemy.rot < desired_rot - PI) {
-      enemy.rot += PI * 2;
-    }
-    if (enemy.rot > desired_rot + PI) {
-      enemy.rot -= PI * 2;
-    }
-    let drot = abs(enemy.rot - desired_rot);
-    let rot_allowed = enemy.turning * dt;
-    if (drot < rot_allowed) {
-      enemy.rot = desired_rot;
-    } else {
-      if (enemy.rot < desired_rot) {
-        enemy.rot += rot_allowed;
+    if (target) {
+      let desired_rot = desiredRot(enemy, target);
+      if (enemy.rot < desired_rot - PI) {
+        enemy.rot += PI * 2;
+      }
+      if (enemy.rot > desired_rot + PI) {
+        enemy.rot -= PI * 2;
+      }
+      let drot = abs(enemy.rot - desired_rot);
+      let rot_allowed = enemy.turning * dt;
+      if (drot < rot_allowed) {
+        enemy.rot = desired_rot;
       } else {
-        enemy.rot -= rot_allowed;
+        if (enemy.rot < desired_rot) {
+          enemy.rot += rot_allowed;
+        } else {
+          enemy.rot -= rot_allowed;
+        }
+      }
+
+      drot = abs(enemy.rot - desired_rot);
+      let dist_sq = entDistSq(enemy, target);
+      if (drot < enemy.angle_of_fire && dist_sq < enemy.range_sq &&
+        this.tick_counter - enemy.last_fire_time >= enemy.fire_time
+      ) {
+        // can fire
+        enemy.last_fire_time = this.tick_counter;
+        enemy.last_fire_target = target;
+        this.damage(target, enemy.damage);
       }
     }
     let cosr = cos(enemy.rot);
     let sinr = sin(enemy.rot);
     enemy.x += sinr * enemy.speed * dt;
     enemy.y += -cosr * enemy.speed * dt;
-
-    drot = abs(enemy.rot - desired_rot);
-    let dist_sq = entDistSq(enemy, target);
-    if (drot < enemy.angle_of_fire && dist_sq < enemy.range_sq &&
-      this.tick_counter - enemy.last_fire_time >= enemy.fire_time
-    ) {
-      // can fire
-      enemy.last_fire_time = this.tick_counter;
-      enemy.last_fire_target = target;
-      this.damage(target, enemy.damage);
-    }
-
   }
 
   tick(dt) {
@@ -1235,8 +1295,8 @@ function drawMap(dt) {
         ui.drawBox({
           x: elem_pos.x - 2,
           y: elem_pos.y - 2,
-          w: elem_pos.w + 4,
-          h: elem_pos.h + 4,
+          w: elem_pos.w + 5,
+          h: elem_pos.h + 5,
         }, ui.sprites.reticule_panel, 1);
       }
     }
@@ -1351,8 +1411,9 @@ function drawHUD() {
 
       if (game.selected === type_id) {
         font.draw({
-          color: pico8.font_colors[selected === null ? 8 : 10],
-          x, y: CARD_Y + CARD_ICON_X,
+          style: selected === null ? style_cannot_afford : style_selected,
+          x: x + 1,
+          y: CARD_Y + CARD_ICON_X,
           z: Z.UI + 3,
           w: CARD_W,
           h: CARD_ICON_W,

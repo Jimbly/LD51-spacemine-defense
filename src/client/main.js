@@ -283,7 +283,7 @@ class Game {
   }
 
   tickWrap() {
-    if (this.paused || this.value_mined === this.total_value) {
+    if (this.paused) {
       return;
     }
     let dt = engine.getFrameDt();
@@ -357,14 +357,18 @@ class Game {
     this.selected_ent = null;
   }
 
+  exhaustMiner(ent) {
+    ent.asteroid_link = null;
+    ent.exhausted = true;
+    ent.supply = ent.supply_max = 0;
+    ent.rot = 0;
+    ent.frame = FRAME_MINERDONE;
+  }
+
   activateMiner(ent) {
     let links = this.findAsteroidLinks(ent);
     if (!links.length) {
-      ent.asteroid_link = null;
-      ent.exhausted = true;
-      ent.supply = ent.supply_max = 0;
-      ent.rot = 0;
-      ent.frame = FRAME_MINERDONE;
+      this.exhaustMiner(ent);
       return false;
     }
     links.sort(cmpDistSq);
@@ -406,6 +410,21 @@ class Game {
       if (!ent.supply) {
         ent.time_accum = 0;
         this.updateMinerFrame(ent);
+      }
+
+      if (this.value_mined === this.total_value) {
+        this.endGame();
+      }
+    }
+  }
+
+  endGame() {
+    this.paused = true;
+    let { map } = this;
+    for (let key in map) {
+      let ent = map[key];
+      if (ent.type === TYPE_MINER) {
+        this.exhaustMiner(ent);
       }
     }
   }

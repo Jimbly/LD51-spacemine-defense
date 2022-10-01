@@ -38,7 +38,6 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
     this should be a filling up bar, probably?
 * Next unit: other supply generator (cheap, cannot be tightly packed)?
 * Then: waves of enemies?  Is this fun already, how much time is left? =)
-* Supply links have an active state ?
 * Unit ideas:
   * Major miner
   * Weapons Storage / Build Storage (just stores supplies only to be released for weapons/building)

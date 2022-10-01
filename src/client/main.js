@@ -49,6 +49,9 @@ const TYPE_FACTORY = 'factory';
 const TYPE_ROUTER = 'router';
 
 const PACKET_SPEED = 100/1000; // pixels per millisecond
+const SUPPLY_EMIT_TIME = 250;
+
+const FACTORY_SUPPLY = 10;
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -113,8 +116,8 @@ const ent_types = {
     cost: 800,
     cost_supply: 7,
     r: RADIUS_DEFAULT,
-    supply_prod: 5, // every 10 seconds
-    supply_max: 5,
+    supply_prod: FACTORY_SUPPLY, // every 10 seconds
+    supply_max: FACTORY_SUPPLY,
     supply_links: Infinity,
     supply_source: true,
   },
@@ -168,6 +171,10 @@ function cmpDistSq(a, b) {
   return a.dist_sq - b.dist_sq;
 }
 
+function cmpID(a, b) {
+  return a.id < b.id ? -1 : 1;
+}
+
 class Game {
 
   addEnt(ent) {
@@ -182,6 +189,10 @@ class Game {
     ent.supply_max = ent_type.supply_max;
     ent.supply_enroute = false;
     ent.supply_source = ent_type.supply_source;
+    if (ent.supply_source) {
+      ent.order_time_accum = 0;
+      ent.orders = [];
+    }
     this.map[++this.last_id] = ent;
     ent.id = this.last_id;
     return ent;
@@ -196,6 +207,7 @@ class Game {
     this.supply_links = [];
     this.packets = [];
     this.last_id = 0;
+    this.round_robin_id = 0;
 
     this.addEnt({
       type: TYPE_FACTORY,
@@ -298,19 +310,6 @@ class Game {
     }
   }
 
-  findSupplySource(ent) {
-    // TODO: nearest by link distance
-    // TODO: only if links are all active
-    let { map } = this;
-    for (let key in map) {
-      let other = map[key];
-      if (other.active && other.supply && other.supply_source) {
-        return other;
-      }
-    }
-    return null;
-  }
-
   emitSupply(source, target) {
     source.supply--;
     this.packets.push({
@@ -324,6 +323,38 @@ class Game {
       speed: PACKET_SPEED,
       pos: [source.x, source.y],
     });
+  }
+
+  updateSupplySource(ent, dt) {
+    ent.order_time_accum += dt;
+    if (!ent.orders.length) {
+      ent.order_time_accum = min(ent.order_time_accum, SUPPLY_EMIT_TIME);
+      return;
+    }
+    if (ent.order_time_accum >= SUPPLY_EMIT_TIME) {
+      ent.order_time_accum -= SUPPLY_EMIT_TIME;
+      let target = ent.orders.splice(0, 1)[0];
+      this.emitSupply(ent, target);
+    }
+  }
+
+  findSupplySource(ent) {
+    // TODO: nearest by link distance
+    // TODO: only if links are all active
+    let { map } = this;
+    for (let key in map) {
+      let other = map[key];
+      if (other.supply_source && other.active &&
+        other.supply > other.orders.length
+      ) {
+        return other;
+      }
+    }
+    return null;
+  }
+
+  orderSupply(source, target) {
+    source.orders.push(target);
     target.supply_enroute = true;
   }
 
@@ -331,28 +362,17 @@ class Game {
     // find supply to send
     let source = this.findSupplySource(ent);
     if (!source) {
-      return;
+      return false;
     }
-    this.emitSupply(source, ent);
-  }
-
-  updateBuilding(ent) {
-    let { supply_enroute } = ent;
-    if (supply_enroute) {
-      return;
-    }
-    this.pullSupply(ent);
+    this.orderSupply(source, ent);
+    return true;
   }
 
   buildingFinished(ent) {
     ent.building = null;
     ent.frame = ent_types[ent.type].frame;
     if (ent.type === TYPE_MINER) {
-      if (this.activateMiner(ent)) {
-        this.pullSupply(ent);
-      }
-    } else if (ent.supply_max) {
-      this.pullSupply(ent);
+      this.activateMiner(ent);
     }
   }
 
@@ -386,24 +406,43 @@ class Game {
         this.activateMiner(target);
       }
     }
+    if (this.needsSupply(target, true)) {
+      this.pullSupply(target);
+    }
     return true;
   }
 
+  needsSupply(ent, post_packet) {
+    return !ent.supply_enroute && (
+      ent.building ||
+      ent.supply_max && ent.supply < ent.supply_max && !ent.supply_source &&
+        !(post_packet && ent.supply > ent.supply_max - 1)
+    );
+  }
+
   every10Seconds() {
-    let { map } = this;
-    // Generate supply
+    let { map, round_robin_id } = this;
+    // Generate supply, assemble list of who needs
+    let needs_supply = [];
     for (let key in map) {
       let ent = map[key];
       let ent_type = ent_types[ent.type];
       if (ent_type.supply_prod) {
         ent.supply = min(ent_type.supply_max, ent.supply + ent_type.supply_prod);
       }
+      if (this.needsSupply(ent, false)) {
+        needs_supply.push(ent);
+      }
     }
     // Send to those in need
-    for (let key in map) {
-      let ent = map[key];
-      if (ent.active && ent.supply_max && ent.supply < ent.supply_max) {
-        this.pullSupply(ent);
+    needs_supply.sort(cmpID);
+    let start_ent = needs_supply.find((a) => a.id > round_robin_id);
+    let start_idx = start_ent ? needs_supply.indexOf(start_ent) : 0;
+    for (let ii = 0; ii < needs_supply.length; ++ii) {
+      let idx = (start_idx + ii) % needs_supply.length;
+      let ent = needs_supply[idx];
+      if (this.pullSupply(ent)) {
+        this.round_robin_id = ent.id;
       }
     }
   }
@@ -421,8 +460,14 @@ class Game {
     for (let key in map) {
       let ent = map[key];
       if (ent.building) {
-        this.updateBuilding(ent);
-      } else if (ent.type === TYPE_MINER) {
+        // No updating while building
+        continue;
+      }
+      if (ent.supply_source) {
+        this.updateSupplySource(ent, dt);
+      }
+
+      if (ent.type === TYPE_MINER) {
         this.updateMiner(ent, dt);
       }
     }
@@ -551,7 +596,7 @@ class Game {
     let ent_type = ent_types[selected];
     let { map } = this;
     let { frame, frame_building, cost } = ent_type;
-    let elem = this.addEnt({
+    let ent = this.addEnt({
       type: selected,
       frame: frame_building, x, y, z: Z[frame],
       rot: 0,
@@ -563,29 +608,32 @@ class Game {
       },
       vis_seed: random(),
     });
-    elem.building_est = elem.building;
+    ent.building_est = ent.building;
     let asteroid_link;
     // Find first of any given type
     links.forEach((a) => {
       let { id } = a;
-      let ent = map[id];
-      if (ent.type === TYPE_ASTEROID) {
+      let asteroid = map[id];
+      if (asteroid.type === TYPE_ASTEROID) {
         if (!asteroid_link) {
           asteroid_link = id;
         }
       } else {
         // must be supply link
-        this.supply_links.push([id, elem.id]);
+        this.supply_links.push([id, ent.id]);
       }
     });
     if (selected === TYPE_MINER) {
-      elem.time_accum = 0;
-      elem.exhausted = false;
-      //elem.asteroid_link = asteroid_link;
-      //assert(elem.asteroid_link);
-      //this.updateMinerFrame(elem);
+      ent.time_accum = 0;
+      ent.exhausted = false;
+      //ent.asteroid_link = asteroid_link;
+      //assert(ent.asteroid_link);
+      //this.updateMinerFrame(ent);
     }
     this.money -= cost;
+
+    this.pullSupply(ent);
+
     this.paused = false;
   }
 
@@ -867,7 +915,7 @@ function drawHUD() {
 
   let [supply_cur, supply_max] = game.availableSupply();
   font.draw({
-    color: pico8.font_colors[3],
+    color: pico8.font_colors[4],
     x: x + 6,
     y: CARD_Y + 6 + ui.font_height * 2,
     z: Z.UI + 1,

@@ -23,10 +23,12 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
   * Supply links have an active state
   * Supplies travel on links
   * Rules:
-    * Units that are building: grab a packet whenever one is available and none are in flight
-    * On 10 second tick:
-      * Send one packet to each building unit that does not have one in flight (will only happen if we were out of supply)
-      * Initially figure out how many packets each unit needs to get to max, send round robin to those
+    X Factories have orders for where to send packets to - having an order in place counts as in-flight
+    X Whenever a packet is delivered, if we can use 1 whole additional packet, request another from the nearest available by adding to order queue (should dispatch immediately)
+    X Units that are building should be the same as anything else that needs supplies
+    X On 10 second tick:
+      X In a round robin fashion, add an order to send a packet to every unit who can fit any additional supply, at most 1 per unit
+      * probably priority of: building > weapons > miners
   * Do not allow supply links overlapping nodes, or nodes placed over links
     * supply links maybe don't get stored per-ent?
   * Probably: can select ents and see their status: current+max supply, value left on asteroids, etc

@@ -13,17 +13,22 @@ The 10 Second Space Game
 X Field of asteroids
 X First unit: minor miner
 X Select miner, place on map, builds instantly, minerals start coming in, asteroids get depleted
-  * miners change color
-  * miners show dig arrow sprite too
+  X miners change color
+  X miners show dig arrow sprite too
 * Next: simulation functionality:
-  * Second unit: Core, generates power, and build packets
-  * Building takes build packets
+  * Second unit: Generator, generates power
+    * Energy is stored up to some partial capacity (so building can start immediately, if there was power left)
+  * Building takes energy
   * Mining takes energy
-  * Next units: Build station, energy generator, energy node
+  * Probably: can select ents and see their status: current+max energy, value left on asteroids, etc
+  * Build graph nodes
+* Progress
+  * Show progress to completing the whole level, show time elapsed
+* Next unit: other energy generator (cheap, cannot be tightly packed)?
 * Then: waves of enemies?  Is this fun already, how much time is left? =)
 * Unit ideas:
   * Major miner
-  * Battery
+  * Weapons Battery / Build Battery (just stores energy only to be released for weapons/building)
   * Laser
   * Missile
   * Cannon

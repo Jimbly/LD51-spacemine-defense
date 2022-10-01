@@ -12,15 +12,18 @@ import * as pico8 from 'glov/client/pico8.js';
 import { createSprite } from 'glov/client/sprites.js';
 import * as ui from 'glov/client/ui.js';
 import { mashString, randCreate } from 'glov/common/rand_alea.js';
-import { v2iRound, v3copy, v4set, vec2 } from 'glov/common/vmath.js';
+import { v2iRound, v3copy, v3set, v4set, vec2, vec4 } from 'glov/common/vmath.js';
 import {
   FRAME_ASTEROID,
   FRAME_ASTEROID_EMPTY,
   FRAME_MINER,
+  FRAME_MINERDONE,
+  FRAME_MINERUL,
+  FRAME_MINERUP,
   sprite_space,
 } from './img/space.js';
 
-const { PI, abs, min, sin, floor } = Math;
+const { PI, abs, min, round, sin, floor } = Math;
 
 const TYPE_MINER = 'miner';
 const TYPE_ASTEROID = 'asteroid';
@@ -31,8 +34,13 @@ Z.SPRITES = 10;
 Z[FRAME_ASTEROID_EMPTY] = 9;
 Z[FRAME_ASTEROID] = 10;
 Z.LINKS = 15;
+Z[FRAME_MINERDONE] = 20;
 Z[FRAME_MINER] = 20;
+Z[FRAME_MINERUP] = 21;
+Z[FRAME_MINERUL] = 21;
 Z.PLACE_PREVIEW = 30;
+
+const { KEYS } = input;
 
 // Virtual viewport for our game logic
 const game_width = 720;
@@ -98,11 +106,12 @@ function cmpDistSq(a, b) {
 class Game {
   constructor(seed) {
     let w = this.w = 720;
-    let h = this.h = 480;
+    let h = this.h = 400;
     let rand = this.rand = randCreate(mashString(seed));
     let num_asteroids = 100;
     let map = this.map = {};
     this.last_id = 0;
+    let total_value = 0;
     for (let ii = 0; ii < num_asteroids; ++ii) {
       let x = rand.floatBetween(0, 1);
       x = x * x * (rand.range(2) ? -1 : 1);
@@ -110,7 +119,8 @@ class Game {
       let y = rand.floatBetween(0, 1);
       y = y * y * (rand.range(2) ? -1 : 1);
       y = y * h / 2 + h / 2;
-      map[++this.last_id] = {
+      ++this.last_id;
+      let elem = {
         type: TYPE_ASTEROID,
         frame: FRAME_ASTEROID,
         x, y,
@@ -120,13 +130,21 @@ class Game {
         value: 500 + rand.range(1000),
         r: RADIUS_DEFAULT,
       };
+      map[this.last_id] = elem;
+      total_value += elem.value;
     }
+    this.value_mined = 0;
+    this.total_value = total_value;
     this.money = 500;
     this.selected = engine.DEBUG ? TYPE_MINER : null;
     this.tick_counter = 0;
+    this.paused = true;
   }
 
   tickWrap() {
+    if (this.paused) {
+      return;
+    }
     let dt = engine.getFrameDt();
     while (dt > 16) {
       this.tick(16);
@@ -146,11 +164,14 @@ class Game {
       let links = this.findAsteroidLinks(ent);
       if (!links.length) {
         ent.active = false;
+        ent.rot = 0;
+        ent.frame = FRAME_MINERDONE;
         return;
       }
       links.sort(cmpDistSq);
       ent.links.push(links[0]);
       ent.asteroid_link = links[0].id;
+      this.updateMinerFrame(ent);
       asteroid = this.map[ent.asteroid_link];
     }
     ent.time_accum += dt;
@@ -159,6 +180,7 @@ class Game {
     if (mined >= 1) {
       mined = min(mined, asteroid.value);
       asteroid.value -= mined;
+      this.value_mined += mined;
       if (!asteroid.value) {
         asteroid.frame = FRAME_ASTEROID_EMPTY;
         asteroid.z = Z[FRAME_ASTEROID_EMPTY];
@@ -181,7 +203,7 @@ class Game {
     let { map } = this;
     for (let key in map) {
       let ent = map[key];
-      if (ent.frame === FRAME_MINER) {
+      if (ent.type === TYPE_MINER) {
         this.updateMiner(ent, dt);
       }
     }
@@ -215,10 +237,7 @@ class Game {
   }
 
   canPlace(param) {
-    let selected = this.getSelected(false);
-    if (!selected) {
-      return false; // can't afford
-    }
+    let selected = this.getSelected(true);
     let elem = ent_types[selected];
     let { map } = this;
     let { r } = elem;
@@ -246,6 +265,38 @@ class Game {
       }
     }
     return true;
+  }
+
+  updateMinerFrame(miner) {
+    let asteroid = this.map[miner.asteroid_link];
+    let dx = asteroid.x - miner.x;
+    let dy = asteroid.y - miner.y;
+    if (abs(dx) > 2 * abs(dy)) {
+      miner.frame = FRAME_MINERUP;
+      if (dx < 0) {
+        miner.rot = 3*PI/2;
+      } else {
+        miner.rot = PI/2;
+      }
+    } else if (abs(dy) > 2 * abs(dx)) {
+      miner.frame = FRAME_MINERUP;
+      if (dy < 0) {
+        miner.rot = 0;
+      } else {
+        miner.rot = PI;
+      }
+    } else {
+      miner.frame = FRAME_MINERUL;
+      if (dx < 0 && dy < 0) {
+        miner.rot = 0;
+      } else if (dx < 0 && dy >= 0) {
+        miner.rot = 3*PI/2;
+      } else if (dx >= 0 && dy < 0) {
+        miner.rot = PI/2;
+      } else {
+        miner.rot = PI;
+      }
+    }
   }
 
   place(param) {
@@ -279,9 +330,11 @@ class Game {
       elem.active = true;
       elem.asteroid_link = seen[TYPE_ASTEROID];
       assert(elem.asteroid_link);
+      this.updateMinerFrame(elem);
     }
     map[++this.last_id] = elem;
     this.money -= cost;
+    this.paused = false;
   }
 }
 
@@ -292,25 +345,33 @@ function playInit() {
 }
 
 let mouse_pos = vec2();
+let place_color = vec4();
 function drawGhost(viewx0, viewy0, viewx1, viewy1) {
   let { map } = game;
   let selected = game.getSelected(true);
   if (selected !== null) {
-    //let can_afford = game.canAfford(selected);
     input.mousePos(mouse_pos);
     v2iRound(mouse_pos);
     let x = mouse_pos[0];
     let y = mouse_pos[1];
     let place_param = { x, y, links: [] };
     let can_place = game.canPlace(place_param) && x >= viewx0 && x < viewx1 && y >= viewy0 && y < viewy1;
-    sprite_space.draw({
+    let can_afford = game.canAfford(selected);
+    v4set(place_color, 1, 1, 1, 1);
+    if (!can_place) {
+      v3set(place_color, 1, 0, 0);
+    }
+    if (!can_afford) {
+      place_color[3] = 0.5;
+    }
+    let miner = {
       x, y, z: Z.PLACE_PREVIEW,
       w: SPRITE_W,
       h: SPRITE_W,
       frame: ent_types[selected].frame,
-      color: can_place ? undefined : [1,0,1,1],
-    });
-    if (can_place) {
+      color: place_color,
+    };
+    if (can_place && can_afford) {
       let { links } = place_param;
       links.sort(cmpDistSq);
       let seen = {};
@@ -318,6 +379,10 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
         let link = links[ii];
         let ent = map[link.id];
         let is_first = !seen[ent.type];
+        if (is_first && ent.type === TYPE_ASTEROID) {
+          miner.asteroid_link = link.id;
+          game.updateMinerFrame(miner);
+        }
         seen[ent.type] = true;
         ui.drawLine(x, y, ent.x, ent.y, Z.LINKS + (is_first ? 2 : 1), 1, 1,
           link_color[ent.type][is_first ? 0 : 1]);
@@ -327,6 +392,7 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
         ui.playUISound('button_click');
       }
     }
+    sprite_space.draw(miner);
   }
 }
 
@@ -373,6 +439,27 @@ function drawMap() {
 }
 
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
+
+const HUD_PROGRESS_W = game_width / 4;
+const HUD_PROGRESS_X = (game_width - HUD_PROGRESS_W) / 2;
+
+function perc(v) {
+  let rv = round(v * 100);
+  if (rv === 100 && v !== 1) {
+    rv = 99;
+  }
+  return `${rv}%`;
+}
+
+function pad2(v) {
+  return `0${v}`.slice(-2);
+}
+function timefmt(ms) {
+  let s = floor(ms / 1000);
+  let m = floor(s / 60);
+  s -= m * 60;
+  return `${m}:${pad2(s)}`;
+}
 
 function drawHUD() {
   v3copy(engine.border_clear_color, pico8.colors[15]);
@@ -422,12 +509,14 @@ function drawHUD() {
         align: font.ALIGN.HCENTER,
       });
 
+      let disabled = !game.canAfford(type_id) && game.selected !== type_id;
       if (ui.button({
         x, y: CARD_Y,
         w: CARD_W, h: CARD_H,
         text: ' ',
         base_name: 'card_button',
-        disabled: !game.canAfford(type_id) && game.selected !== type_id,
+        disabled,
+        hotkey: KEYS[String.fromCharCode('1'.charCodeAt(0) + ii)],
       })) {
         game.selected = game.selected === type_id ? null : type_id;
       }
@@ -453,10 +542,29 @@ function drawHUD() {
     size: ui.font_height * 2,
     text: `Money: ${game.money}g`,
   });
+
+  let y = 2;
+  font.draw({
+    x: HUD_PROGRESS_X, w: HUD_PROGRESS_W,
+    y,
+    align: font.ALIGN.HCENTER,
+    text: `${game.value_mined} / ${game.total_value} (${perc(game.value_mined / game.total_value)})`,
+  });
+  y += ui.font_height;
+  font.draw({
+    x: HUD_PROGRESS_X, w: HUD_PROGRESS_W,
+    y,
+    align: font.ALIGN.HCENTER,
+    text: timefmt(game.tick_counter),
+  });
+
 }
 
 function statePlay(dt) {
   game.tickWrap();
+  if (game.selected && (input.click({ button: 2 }) || input.keyUpEdge(KEYS.ESC))) {
+    game.selected = null;
+  }
   drawHUD();
   drawMap();
 }

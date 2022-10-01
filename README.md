@@ -32,10 +32,9 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
   X Do not allow supply links overlapping nodes, or nodes placed over links
   X Can select ents and see their status: current+max supply, value left on asteroids, etc
     X Also, scrap them
-* Factories should visually count up to 10 somehow
-* Progress
-  * Show progress to completing the whole level, show time elapsed
-    this should be a filling up bar, probably?
+X Factories should visually count up to 10 somehow, as well as show that they're out of, or have, supplies
+X Progress
+  X Show progress to completing the whole level, show time elapsed, this should be a filling up bar, probably?
 * Next unit: other supply generator (cheap, cannot be tightly packed)?
 * Then: waves of enemies?  Is this fun already, how much time is left? =)
 * Unit ideas:

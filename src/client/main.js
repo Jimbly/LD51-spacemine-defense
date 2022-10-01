@@ -40,6 +40,8 @@ import {
   FRAME_ASTEROID_EMPTY,
   FRAME_FACTORY,
   FRAME_FACTORY_BUILDING,
+  FRAME_FACTORY_EMPTY,
+  FRAME_FACTORY_READY,
   FRAME_MINER,
   FRAME_MINERDONE,
   FRAME_MINERUL,
@@ -128,6 +130,8 @@ const ent_types = {
     type: TYPE_FACTORY,
     frame: FRAME_FACTORY,
     frame_building: FRAME_FACTORY_BUILDING,
+    frame_full: FRAME_FACTORY,
+    frame_empty: FRAME_FACTORY_EMPTY,
     label: 'Factory',
     desc: [`Generates ${FACTORY_SUPPLY} Supply every 10 seconds`],
     cost: 800,
@@ -230,6 +234,7 @@ class Game {
     if (ent.supply_source) {
       ent.order_time_accum = 0;
       ent.orders = [];
+      ent.frame = ent_type.frame_empty;
     }
     this.map[++this.last_id] = ent;
     ent.id = this.last_id;
@@ -248,12 +253,13 @@ class Game {
     this.round_robin_id = 0;
     this.paths_dirty = true;
 
-    this.addEnt({
+    let factory = this.addEnt({
       type: TYPE_FACTORY,
       x: w/2, y: h/2,
       supply: ent_types[TYPE_FACTORY].supply_max,
       active: true,
     });
+    factory.frame = ent_types[TYPE_FACTORY].frame_full;
 
     let total_value = 0;
     for (let ii = 0; ii < num_asteroids; ++ii) {
@@ -279,7 +285,7 @@ class Game {
     this.selected = null; // engine.DEBUG ? TYPE_MINER : null;
     this.tick_counter = 0;
     this.paused = true;
-    this.selected_ent = engine.DEBUG ? this.map[1] : null;
+    this.selected_ent = engine.DEBUG ? factory : null;
   }
 
   tickWrap() {
@@ -400,6 +406,7 @@ class Game {
       asteroid.value -= mined;
       this.value_mined += mined;
       if (!asteroid.value) {
+        asteroid.dead_asteroid = true;
         asteroid.frame = FRAME_ASTEROID_EMPTY;
         asteroid.z = Z[FRAME_ASTEROID_EMPTY];
       }
@@ -447,6 +454,9 @@ class Game {
     let next_id = this.nextStep(source.id, target.id);
     assert(next_id);
     source.supply--;
+    if (!source.supply) {
+      source.frame = ent_types[source.type].frame_empty;
+    }
     this.packets.push({
       x: source.x,
       y: source.y,
@@ -578,6 +588,9 @@ class Game {
     } else if (ent.type === TYPE_ROUTER) {
       this.paths_dirty = true;
     }
+    if (ent.supply_source) {
+      ent.frame = ent_types[ent.type].frame_empty;
+    }
     if (ent.max_links > 1) {
       // supply passes through us
       this.reorderSupply();
@@ -663,8 +676,9 @@ class Game {
     for (let key in map) {
       let ent = map[key];
       let ent_type = ent_types[ent.type];
-      if (ent_type.supply_prod) {
+      if (ent.active && ent_type.supply_prod) {
         ent.supply = min(ent_type.supply_max, ent.supply + ent_type.supply_prod);
+        ent.frame = ent_type.frame_full;
       }
       if (this.needsSupply(ent, false)) {
         needs_supply.push(ent);
@@ -766,6 +780,9 @@ class Game {
     let { map, supply_links } = this;
     for (let id in map) {
       let ent = map[id];
+      if (ent.dead_asteroid) {
+        continue;
+      }
       if (ent === target) {
         continue;
       }
@@ -800,6 +817,9 @@ class Game {
     for (let id in map) {
       id = Number(id);
       let ent = map[id];
+      if (ent.dead_asteroid) {
+        continue;
+      }
       let dist_sq = entDistSq(ent, param);
       if (dist_sq <= (r + ent.r) * (r + ent.r)) {
         return false;
@@ -1027,10 +1047,18 @@ function drawMap(dt) {
   let viewy1 = game_height - PAD_TOP - PAD_BOTTOM;
   camera2d.set(-xoffs, -yoffs, game_width - xoffs, game_height - yoffs);
 
+  let blink = ((game.tick_counter % 10000) > 9000) &&
+    game.tick_counter % 250 > 125;
+
   let { map, supply_links, packets } = game;
   for (let key in map) {
     let elem = map[key];
+    let frame_save = elem.frame;
+    if (elem.type === TYPE_FACTORY && elem.active && blink) {
+      elem.frame = FRAME_FACTORY_READY;
+    }
     sprite_space.draw(elem);
+    elem.frame = frame_save;
     // if (elem.supply) {
     //   font.draw({
     //     x: elem.x,
@@ -1038,30 +1066,32 @@ function drawMap(dt) {
     //     text: `${elem.supply}`,
     //   });
     // }
-    let elem_pos = {
-      x: floor(elem.x - elem.r),
-      y: floor(elem.y - elem.r),
-      w: ceil(elem.r * 2 + 1),
-      h: ceil(elem.r * 2 + 1),
-    };
-    let click = input.click(elem_pos);
-    if (click) {
-      ui.playUISound('button_click');
-      if (click.button === 1 && elem.type !== TYPE_ASTEROID) {
-        game.selected = elem.type;
-        game.selected_ent = null;
-      } else {
-        game.selected_ent = elem;
-        game.selected = null;
+    if (!elem.dead_asteroid) {
+      let elem_pos = {
+        x: floor(elem.x - elem.r),
+        y: floor(elem.y - elem.r),
+        w: ceil(elem.r * 2 + 1),
+        h: ceil(elem.r * 2 + 1),
+      };
+      let click = input.click(elem_pos);
+      if (click) {
+        ui.playUISound('button_click');
+        if (click.button === 1 && elem.type !== TYPE_ASTEROID) {
+          game.selected = elem.type;
+          game.selected_ent = null;
+        } else {
+          game.selected_ent = elem;
+          game.selected = null;
+        }
       }
-    }
-    if (game.selected_ent === elem) {
-      ui.drawBox({
-        x: elem_pos.x - 2,
-        y: elem_pos.y - 2,
-        w: elem_pos.w + 4,
-        h: elem_pos.h + 4,
-      }, ui.sprites.reticule_panel, 1);
+      if (game.selected_ent === elem) {
+        ui.drawBox({
+          x: elem_pos.x - 2,
+          y: elem_pos.y - 2,
+          w: elem_pos.w + 4,
+          h: elem_pos.h + 4,
+        }, ui.sprites.reticule_panel, 1);
+      }
     }
     let { asteroid_link, building_est } = elem;
     if (building_est) {
@@ -1109,13 +1139,13 @@ function drawMap(dt) {
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
 const CARD_SUPPLY_Y = CARD_Y + CARD_H - 5;
 
-function perc(v) {
-  let rv = round(v * 100);
-  if (rv === 100 && v !== 1) {
-    rv = 99;
-  }
-  return `${rv}%`;
-}
+// function perc(v) {
+//   let rv = round(v * 100);
+//   if (rv === 100 && v !== 1) {
+//     rv = 99;
+//   }
+//   return `${rv}%`;
+// }
 
 function pad2(v) {
   return `0${v}`.slice(-2);
@@ -1272,6 +1302,12 @@ function drawHUD() {
         });
         y += line_height;
       }
+      font.draw({
+        color: pico8.font_colors[0],
+        x, y,
+        text: 'Asteroids can be built over once depleted',
+      });
+      y += line_height;
     } else {
       font.draw({
         color: pico8.font_colors[0],
@@ -1400,19 +1436,22 @@ function drawHUD() {
   });
 
   x += status_w + 2;
+  let progress_w = round(status_w * 1.25);
   ui.panel({
     x, y,
-    w: status_w * 1.5,
+    w: progress_w,
     h: status_h,
   });
+  let progress = game.value_mined / game.total_value;
+  ui.drawRect(x + 3, y + 3, x + 3 + (progress_w - 6) * progress, y + status_h - 3, Z.UI, pico8.colors[3]);
 
   font.draw({
     color: pico8.font_colors[0],
     x: x + 6,
     y: status_text_y,
-    z: Z.UI + 1,
+    z: Z.UI + 2,
     size: status_size,
-    text: `${game.value_mined} / ${game.total_value} (${perc(game.value_mined / game.total_value)})` +
+    text: `${game.value_mined} / ${game.total_value}` +
       `  ${timefmt(game.tick_counter)}`,
   });
 }

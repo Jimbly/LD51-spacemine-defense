@@ -38,6 +38,7 @@ import {
 import {
   FRAME_ASTEROID,
   FRAME_ASTEROID_EMPTY,
+  FRAME_ENEMY1,
   FRAME_FACTORY,
   FRAME_FACTORY_BUILDING,
   FRAME_FACTORY_EMPTY,
@@ -53,7 +54,7 @@ import {
   sprite_space,
 } from './img/space.js';
 
-const { PI, abs, ceil, max, min, random, round, sin, sqrt, floor } = Math;
+const { PI, abs, atan2, ceil, cos, max, min, random, round, sin, sqrt, floor } = Math;
 
 const TYPE_MINER = 'miner';
 const TYPE_ASTEROID = 'asteroid';
@@ -78,8 +79,13 @@ Z[FRAME_MINER] = 30;
 Z[FRAME_MINERUP] = 35;
 Z[FRAME_MINERUL] = 35;
 Z[FRAME_FACTORY] = 40;
+
+Z.ENEMY_LASERS = 46;
+Z.ENEMIES = 45;
 Z.BUILDING_BAR = 50;
 Z.PLACE_PREVIEW = 60;
+
+const LASER_TIME = 100;
 
 const { KEYS } = input;
 
@@ -141,6 +147,7 @@ const ent_types = {
     supply_max: FACTORY_SUPPLY,
     max_links: Infinity,
     supply_source: true,
+    hp: 200,
   },
   [TYPE_MINER]: {
     type: TYPE_MINER,
@@ -155,6 +162,7 @@ const ent_types = {
     mine_rate: MINE_RATE, // millisecond per ore
     supply_rate: 1/10000, // supply per millisecond
     max_links: 1,
+    hp: 50,
   },
   [TYPE_ROUTER]: {
     type: TYPE_ROUTER,
@@ -166,6 +174,7 @@ const ent_types = {
     supply_max: 0,
     r: 3,
     max_links: 5,
+    hp: 20,
   },
   [TYPE_ASTEROID]: {
     frame: FRAME_ASTEROID,
@@ -216,6 +225,12 @@ function asteroidName(ent) {
 let delta = vec2();
 let temp_pos = vec2();
 
+function desiredRot(enemy, ent) {
+  let dx = ent.x - enemy.x;
+  let dy = ent.y - enemy.y;
+  return atan2(dx, -dy);
+}
+
 class Game {
 
   addEnt(ent) {
@@ -225,6 +240,8 @@ class Game {
     ent.h = ent.h || SPRITE_W;
     ent.z = ent.z || Z[ent.frame];
     ent.r = ent.r || ent_type.r || RADIUS_DEFAULT;
+    ent.hp = ent.hp || ent_type.hp || 0;
+    ent.hp_max = ent.hp;
     ent.pos = vec2(ent.x, ent.y);
     ent.supply = ent.supply || 0;
     ent.supply_max = ent_type.supply_max;
@@ -252,6 +269,7 @@ class Game {
     this.last_id = 0;
     this.round_robin_id = 0;
     this.paths_dirty = true;
+    this.enemies = [];
 
     let factory = this.addEnt({
       type: TYPE_FACTORY,
@@ -282,10 +300,16 @@ class Game {
     this.value_mined = 0;
     this.total_value = total_value;
     this.money = 500;
-    this.selected = null; // engine.DEBUG ? TYPE_MINER : null;
+    this.selected = null;
     this.tick_counter = 0;
+    this.decaseconds = 0;
     this.paused = true;
-    this.selected_ent = engine.DEBUG ? factory : null;
+    this.selected_ent = null;
+    if (engine.DEBUG) {
+      this.paused = false;
+      // this.selected = TYPE_MINER;
+      // this.selected_ent = factory;
+    }
   }
 
   tickWrap() {
@@ -300,7 +324,9 @@ class Game {
       this.tick(16);
       dt -= 16;
     }
-    this.tick(dt);
+    if (dt) {
+      this.tick(dt);
+    }
   }
 
   scrapValue(ent) {
@@ -333,18 +359,20 @@ class Game {
     }
     return true;
   }
-  scrap(ent, is_scrap_all) {
+  scrap(ent, is_scrap_all, is_from_death) {
     let { supply_links, map, packets } = this;
     if (is_scrap_all) {
       for (let key in map) {
         ent = map[key];
         if (ent.type === TYPE_MINER && ent.exhausted) {
-          this.scrap(ent);
+          this.scrap(ent, false, false);
         }
       }
       return;
     }
-    this.money += this.scrapValue(ent);
+    if (!is_from_death) {
+      this.money += this.scrapValue(ent);
+    }
     this.paths_dirty = true;
     delete map[ent.id];
     for (let ii = supply_links.length - 1; ii >= 0; --ii) {
@@ -360,7 +388,9 @@ class Game {
         ridx(packets, ii);
       }
     }
-    this.selected_ent = null;
+    if (this.selected_ent === ent) {
+      this.selected_ent = null;
+    }
   }
 
   exhaustMiner(ent) {
@@ -671,6 +701,7 @@ class Game {
 
   every10Seconds() {
     let { map, round_robin_id } = this;
+    this.decaseconds++;
     // Generate supply, assemble list of who needs
     let needs_supply = [];
     for (let key in map) {
@@ -698,6 +729,114 @@ class Game {
         this.round_robin_id = ent.id;
       }
     }
+
+    if (this.decaseconds > 6 && this.decaseconds % 3 === 0) {
+      this.spawn_wave = true;
+    }
+  }
+
+  spawnWave() {
+    this.spawn_wave = false;
+    let { enemies, w, h } = this;
+    let direction = this.rand.random() * PI * 2;
+    let count = 20;
+    // TODO: announce!
+    let dist = game_width / 4;
+    for (let ii = 0; ii < count; ++ii) {
+      direction += (this.rand.random() - 0.5) * 20;
+      let cosd = cos(direction);
+      let sind = sin(direction);
+      let e = {
+        x: w/2 + sind * dist,
+        y: h/2 + cosd * dist,
+        w: SPRITE_W,
+        h: SPRITE_W,
+        z: Z.ENEMIES,
+        rot: this.rand.random() * 2 * PI, // -direction,
+        speed: 10/1000, // pixels per ms
+        turning: 0.0008, // radians per ms
+        damage: 1,
+        angle_of_fire: PI/4,
+        hp: 5,
+        frame: FRAME_ENEMY1,
+        last_fire_time: 0,
+        last_fire_target: null,
+        range_sq: 26*26,
+        fire_time: 700 + this.rand.range(200),
+      };
+      enemies.push(e);
+    }
+  }
+
+  enemyFindTarget(enemy) {
+    let { map } = this;
+    let best = null;
+    let bestd = Infinity;
+    for (let key in map) {
+      let ent = map[key];
+      if (ent.hp) {
+        let d = entDistSq(enemy, ent);
+        if (d < bestd) {
+          best = ent.id;
+          bestd = d;
+        }
+      }
+    }
+    return best;
+  }
+
+  damage(ent, amount) {
+    // TODO: particles, sounds
+    ent.hp -= amount;
+    if (ent.hp <= 0) {
+      this.scrap(ent, false, true);
+    }
+  }
+
+  updateEnemy(enemy, dt) {
+    let target = this.map[enemy.target_id];
+    if (!target) {
+      enemy.target_id = this.enemyFindTarget(enemy);
+      if (!enemy.target_id) {
+        this.paused = true;
+        return;
+      }
+      target = this.map[enemy.target_id];
+    }
+    let desired_rot = desiredRot(enemy, target);
+    if (enemy.rot < desired_rot - PI) {
+      enemy.rot += PI * 2;
+    }
+    if (enemy.rot > desired_rot + PI) {
+      enemy.rot -= PI * 2;
+    }
+    let drot = abs(enemy.rot - desired_rot);
+    let rot_allowed = enemy.turning * dt;
+    if (drot < rot_allowed) {
+      enemy.rot = desired_rot;
+    } else {
+      if (enemy.rot < desired_rot) {
+        enemy.rot += rot_allowed;
+      } else {
+        enemy.rot -= rot_allowed;
+      }
+    }
+    let cosr = cos(enemy.rot);
+    let sinr = sin(enemy.rot);
+    enemy.x += sinr * enemy.speed * dt;
+    enemy.y += -cosr * enemy.speed * dt;
+
+    drot = abs(enemy.rot - desired_rot);
+    let dist_sq = entDistSq(enemy, target);
+    if (drot < enemy.angle_of_fire && dist_sq < enemy.range_sq &&
+      this.tick_counter - enemy.last_fire_time >= enemy.fire_time
+    ) {
+      // can fire
+      enemy.last_fire_time = this.tick_counter;
+      enemy.last_fire_target = target;
+      this.damage(target, enemy.damage);
+    }
+
   }
 
   tick(dt) {
@@ -709,7 +848,11 @@ class Game {
       this.every10Seconds();
     }
 
-    let { map, packets } = this;
+    if (this.spawn_wave || engine.DEBUG && input.keyDownEdge(KEYS.W)) {
+      this.spawnWave();
+    }
+
+    let { map, packets, enemies } = this;
     for (let key in map) {
       let ent = map[key];
       if (ent.building) {
@@ -730,6 +873,10 @@ class Game {
       if (this.updatePacket(packet, dt)) {
         ridx(packets, ii);
       }
+    }
+
+    for (let ii = 0; ii < enemies.length; ++ii) {
+      this.updateEnemy(enemies[ii], dt);
     }
   }
 
@@ -1050,7 +1197,7 @@ function drawMap(dt) {
   let blink = ((game.tick_counter % 10000) > 9000) &&
     game.tick_counter % 250 > 125;
 
-  let { map, supply_links, packets } = game;
+  let { map, supply_links, packets, enemies, tick_counter } = game;
   for (let key in map) {
     let elem = map[key];
     let frame_save = elem.frame;
@@ -1093,11 +1240,12 @@ function drawMap(dt) {
         }, ui.sprites.reticule_panel, 1);
       }
     }
-    let { asteroid_link, building_est } = elem;
+    let { asteroid_link, building_est, hp, hp_max } = elem;
+    let bar_y = elem.y - H_SPRITE_W - BUILDING_H;
     if (building_est) {
       let { progress, required } = building_est;
       let x = elem.x - floor(BUILDING_W/2);
-      let y = elem.y - H_SPRITE_W - BUILDING_H;
+      let y = bar_y;
       ui.drawRect(x, y, x + BUILDING_W, y + BUILDING_H, Z.BUILDING_BAR, pico8.colors[1]);
       let p = progress/required;
       building_est.p = min((building_est.p || 0) + dt / 100 / required, p);
@@ -1106,6 +1254,15 @@ function drawMap(dt) {
       if (building_est.p === 1) {
         delete elem.building_est;
       }
+      bar_y -= BUILDING_H;
+    }
+    if (hp_max && hp < hp_max) {
+      let x = elem.x - floor(BUILDING_W/2);
+      let y = bar_y;
+      let p = hp/hp_max;
+      ui.drawRect(x, y, x + BUILDING_W, y + BUILDING_H, Z.BUILDING_BAR, pico8.colors[p < 0.1 ? 8 : 2]);
+      ui.drawRect(x+1, y+1, x+1 + (BUILDING_W-2) * p, y + BUILDING_H - 1,
+        Z.BUILDING_BAR, pico8.colors[11]);
     }
     if (asteroid_link) {
       let other = map[asteroid_link];
@@ -1131,6 +1288,14 @@ function drawMap(dt) {
   for (let ii = 0; ii < packets.length; ++ii) {
     let packet = packets[ii];
     sprite_space.draw(packet);
+  }
+  for (let ii = 0; ii < enemies.length; ++ii) {
+    let enemy = enemies[ii];
+    sprite_space.draw(enemy);
+    if (enemy.last_fire_time > tick_counter - LASER_TIME) {
+      let target = enemy.last_fire_target;
+      ui.drawLine(enemy.x, enemy.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[8]);
+    }
   }
 
   drawGhost(viewx0, viewy0, viewx1, viewy1);
@@ -1388,10 +1553,10 @@ function drawHUD() {
           hotkey: KEYS.DEL,
         })) {
           // TODO
-          game.scrap(selected_ent, is_scrap_all);
+          game.scrap(selected_ent, is_scrap_all, false);
         } else if (!disabled && (input.keyDownEdge(KEYS.NUMPAD_DECIMAL_POINT) || input.keyDownEdge(KEYS.BACKSPACE))) {
           ui.playUISound('button_click');
-          game.scrap(selected_ent, is_scrap_all);
+          game.scrap(selected_ent, is_scrap_all, false);
         }
       }
     }

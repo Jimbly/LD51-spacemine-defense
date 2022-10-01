@@ -35,10 +35,13 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
 X Factories should visually count up to 10 somehow, as well as show that they're out of, or have, supplies
 X Progress
   X Show progress to completing the whole level, show time elapsed, this should be a filling up bar, probably?
+X Then: waves of enemies?  Is this fun already, how much time is left? =)
+* Weapons
 * Next unit: other supply generator (cheap, cannot be tightly packed)?
-* Then: waves of enemies?  Is this fun already, how much time is left? =)
+* Currently being built stuff should take extra damage, and also refund some when destroyed
 * Unit ideas:
-  * Major miner
+  * Miner Booster
+  * Weapons Booster
   * Weapons Storage / Build Storage (just stores supplies only to be released for weapons/building)
   * Laser/MG
   * Missile

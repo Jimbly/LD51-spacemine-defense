@@ -48,7 +48,6 @@ const TYPE_ASTEROID = 'asteroid';
 const TYPE_FACTORY = 'factory';
 const TYPE_ROUTER = 'router';
 
-const FACTORY_SUPPLY_MAX = 10;
 const PACKET_SPEED = 100/1000; // pixels per millisecond
 
 window.Z = window.Z || {};
@@ -63,6 +62,7 @@ Z[FRAME_MINER] = 20;
 Z[FRAME_MINERUP] = 21;
 Z[FRAME_MINERUL] = 21;
 Z[FRAME_FACTORY] = 22;
+Z.BUILDING_BAR = 25;
 Z.PLACE_PREVIEW = 30;
 
 const { KEYS } = input;
@@ -72,6 +72,7 @@ const game_width = 720;
 const game_height = 480;
 
 const SPRITE_W = 13;
+const H_SPRITE_W = 6;
 
 const NUM_CARDS = 9;
 const CARD_W = 47;
@@ -169,12 +170,15 @@ function cmpDistSq(a, b) {
 class Game {
 
   addEnt(ent) {
-    ent.frame = ent.frame || ent_types[ent.type].frame;
+    let ent_type = ent_types[ent.type];
+    ent.frame = ent.frame || ent_type.frame;
     ent.w = ent.w || SPRITE_W;
     ent.h = ent.h || SPRITE_W;
     ent.z = ent.z || Z[ent.frame];
-    ent.r = ent.r || ent_types[ent.type].r || RADIUS_DEFAULT;
+    ent.r = ent.r || ent_type.r || RADIUS_DEFAULT;
     ent.pos = vec2(ent.x, ent.y);
+    ent.supply = ent.supply || 0;
+    ent.supply_max = ent_type.supply_max;
     this.map[++this.last_id] = ent;
     ent.id = this.last_id;
     return ent;
@@ -193,8 +197,7 @@ class Game {
     this.addEnt({
       type: TYPE_FACTORY,
       x: w/2, y: h/2,
-      supply: FACTORY_SUPPLY_MAX,
-      supply_max: FACTORY_SUPPLY_MAX,
+      supply: ent_types[TYPE_FACTORY].supply_max,
       active: true,
     });
 
@@ -288,6 +291,7 @@ class Game {
 
   findSupplySource(ent) {
     // TODO: nearest by link distance
+    // TODO: only if links are all active
     let { map } = this;
     for (let key in map) {
       let other = map[key];
@@ -344,6 +348,7 @@ class Game {
     // arrived!
     let { building } = target;
     if (building) {
+      target.building_est = target.building;
       building.supply_enroute = false;
       building.progress++;
       if (building.progress === building.required) {
@@ -362,6 +367,7 @@ class Game {
 
   every10Seconds() {
     let { map } = this;
+    // Generate supply
     for (let key in map) {
       let ent = map[key];
       let ent_type = ent_types[ent.type];
@@ -369,6 +375,7 @@ class Game {
         ent.supply = min(ent_type.supply_max, ent.supply + ent_type.supply_prod);
       }
     }
+    // Send to those in need
   }
 
   tick(dt) {
@@ -431,7 +438,7 @@ class Game {
       return false;
     }
     // TODO: limit
-    return ent.active;
+    return true; // No: even if not yet active: ent.active;
   }
 
   canPlace(param) {
@@ -518,6 +525,7 @@ class Game {
       },
       vis_seed: random(),
     });
+    elem.building_est = elem.building;
     let asteroid_link;
     // Find first of any given type
     links.forEach((a) => {
@@ -617,7 +625,10 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
   }
 }
 
-function drawMap() {
+const BUILDING_W = 11;
+const BUILDING_H = 4;
+
+function drawMap(dt) {
   gl.clearColor(0,0,0,1);
   let viewx0 = 0;
   let viewy0 = 0;
@@ -634,8 +645,22 @@ function drawMap() {
   for (let key in map) {
     let elem = map[key];
     sprite_space.draw(elem);
-    if (elem.asteroid_link) {
-      let other = map[elem.asteroid_link];
+    let { asteroid_link, building_est } = elem;
+    if (building_est) {
+      let { progress, required } = building_est;
+      let x = elem.x - floor(BUILDING_W/2);
+      let y = elem.y - H_SPRITE_W - BUILDING_H;
+      ui.drawRect(x, y, x + BUILDING_W, y + BUILDING_H, Z.BUILDING_BAR, pico8.colors[1]);
+      let p = progress/required;
+      building_est.p = min((building_est.p || 0) + dt / 100 / required, p);
+      ui.drawRect(x+1, y+1, x+1 + (BUILDING_W-2) * building_est.p, y + BUILDING_H - 1,
+        Z.BUILDING_BAR, pico8.colors[9]);
+      if (building_est.p === 1) {
+        delete elem.building_est;
+      }
+    }
+    if (asteroid_link) {
+      let other = map[asteroid_link];
       let w = 1;
       let p = 1;
       if (elem.active && other.type === TYPE_ASTEROID) {
@@ -823,7 +848,7 @@ function statePlay(dt) {
     game.selected = null;
   }
   drawHUD();
-  drawMap();
+  drawMap(dt);
 }
 
 export function main() {

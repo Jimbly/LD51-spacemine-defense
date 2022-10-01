@@ -3,7 +3,7 @@
 const local_storage = require('glov/client/local_storage.js');
 local_storage.setStoragePrefix('glovjs-playground'); // Before requiring anything else that might load from this
 
-//import assert from 'assert';
+import assert from 'assert';
 import * as camera2d from 'glov/client/camera2d.js';
 import * as engine from 'glov/client/engine.js';
 import * as input from 'glov/client/input.js';
@@ -338,19 +338,81 @@ class Game {
     }
   }
 
+  getPaths() {
+    if (!this.links_dirty) {
+      return this.paths;
+    }
+    this.links_dirty = false;
+    let { map, supply_links } = this;
+    let paths = [];
+    let keys = [];
+    for (let key in map) {
+      let ent = map[key];
+      if (ent.max_links) {
+        keys.push(ent.id);
+      }
+    }
+    for (let ii = 0; ii < keys.length; ++ii) {
+      let id = keys[ii];
+      paths[id] = [];
+      //paths[id][id] = [0, null];
+    }
+    for (let ii = 0; ii < supply_links.length; ++ii) {
+      let link = supply_links[ii];
+      let [a, b, dist] = link;
+      assert(!paths[a][b]);
+      paths[a][b] = paths[b][a] = [dist, null];
+    }
+    for (let pivot_i = 0; pivot_i < keys.length; ++pivot_i) {
+      let pivot = keys[pivot_i];
+      for (let ii_i = 0; ii_i < keys.length; ++ii_i) {
+        let ii = keys[ii_i];
+        if (pivot === ii) {
+          continue;
+        }
+        for (let jj_i = 0; jj_i < keys.length; ++jj_i) {
+          let jj = keys[jj_i];
+          if (pivot === jj) {
+            continue;
+          }
+          let pij = paths[ii][jj];
+          let pip = paths[ii][pivot];
+          let ppj = paths[pivot][jj];
+          if (pip && ppj) {
+            let d = pip[0] + ppj[0];
+            if (!pij) {
+              paths[ii][jj] = paths[jj][ii] = [d, pivot];
+            } else if (d < pij[0]) {
+              assert.equal(pij, paths[jj][ii]);
+              pij[0] = d;
+              pij[1] = pivot;
+            }
+          }
+        }
+      }
+    }
+    this.paths = paths;
+    return paths;
+  }
+
   findSupplySource(ent) {
-    // TODO: nearest by link distance
-    // TODO: only if links are all active
+    let paths = this.getPaths();
     let { map } = this;
+    let best = null;
+    let bestd = Infinity;
     for (let key in map) {
       let other = map[key];
       if (other.supply_source && other.active &&
         other.supply > other.orders.length
       ) {
-        return other;
+        let path = paths[ent.id][other.id];
+        if (path && path[0] < bestd) {
+          best = other;
+          bestd = path[0];
+        }
       }
     }
-    return null;
+    return best;
   }
 
   orderSupply(source, target) {
@@ -438,6 +500,9 @@ class Game {
     needs_supply.sort(cmpID);
     let start_ent = needs_supply.find((a) => a.id > round_robin_id);
     let start_idx = start_ent ? needs_supply.indexOf(start_ent) : 0;
+    // TODO: assemble the list of those who _could_ receive, then sort them by
+    //    minimum distance from their sources, so we don't have packets crossing
+    //    (probably, or, maybe packet re-routing if they would cross is simpler?)
     for (let ii = 0; ii < needs_supply.length; ++ii) {
       let idx = (start_idx + ii) % needs_supply.length;
       let ent = needs_supply[idx];
@@ -724,7 +789,7 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
         seen[ent.type] = true;
         ui.drawLine(x, y, ent.x, ent.y, Z.LINKS + (is_first ? 2 : 1), 1, 1, color);
       }
-      if (input.click()) {
+      if (input.click({ max_dist: Infinity })) {
         game.place(place_param);
         ui.playUISound('button_click');
       }

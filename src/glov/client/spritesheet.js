@@ -5,7 +5,10 @@ const textures = require('./textures.js');
 
 export function spritesheetRegister(runtime_data) {
   // Create with dummy data, will load later
-  runtime_data.sprite = createSprite({ texs: [], uvs: vec4(0, 0, 1, 1) });
+  runtime_data.sprite = createSprite({
+    texs: [], uvs: vec4(0, 0, 1, 1),
+    origin: vec4(0.5, 0.5, 0, 0), // donotmerge
+  });
   runtime_data[`sprite_${runtime_data.name}`] = runtime_data.sprite;
   runtime_data.sprite.uidata = runtime_data.uidata;
   engineStartupFunc(function () {

@@ -16,10 +16,13 @@ import { v2iRound, v3copy, v3set, v4set, vec2, vec4 } from 'glov/common/vmath.js
 import {
   FRAME_ASTEROID,
   FRAME_ASTEROID_EMPTY,
+  FRAME_FACTORY,
   FRAME_MINER,
   FRAME_MINERDONE,
   FRAME_MINERUL,
   FRAME_MINERUP,
+  FRAME_ROUTER,
+  FRAME_SUPPLY,
   sprite_space,
 } from './img/space.js';
 
@@ -27,6 +30,10 @@ const { PI, abs, min, round, sin, floor } = Math;
 
 const TYPE_MINER = 'miner';
 const TYPE_ASTEROID = 'asteroid';
+const TYPE_FACTORY = 'factory';
+const TYPE_ROUTER = 'router';
+
+const FACTORY_SUPPLY_MAX = 10;
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -38,6 +45,7 @@ Z[FRAME_MINERDONE] = 20;
 Z[FRAME_MINER] = 20;
 Z[FRAME_MINERUP] = 21;
 Z[FRAME_MINERUL] = 21;
+Z[FRAME_FACTORY] = 22;
 Z.PLACE_PREVIEW = 30;
 
 const { KEYS } = input;
@@ -74,26 +82,55 @@ function init() {
 
 const RADIUS_DEFAULT = 4.5;
 const RADIUS_LINK_ASTEROID = SPRITE_W * 2;
+const RADIUS_LINK_SUPPLY = SPRITE_W * 4;
 const RSQR_ASTERIOD = RADIUS_LINK_ASTEROID * RADIUS_LINK_ASTEROID;
+const RSQR_SUPPLY = RADIUS_LINK_SUPPLY * RADIUS_LINK_SUPPLY;
 
 const ent_types = {
+  [TYPE_FACTORY]: {
+    type: TYPE_FACTORY,
+    frame: FRAME_FACTORY,
+    label: 'Factory',
+    cost: 800,
+    cost_supply: 7,
+    r: RADIUS_DEFAULT,
+    suppy_max: 10, // every 10 seconds
+    supply_links: Infinity,
+  },
   [TYPE_MINER]: {
     type: TYPE_MINER,
     frame: FRAME_MINER,
     label: 'Miner',
     cost: 100,
+    cost_supply: 3,
     r: RADIUS_DEFAULT,
     mine_rate: 1000/8, // millisecond per ore
+  },
+  [TYPE_ROUTER]: {
+    type: TYPE_ROUTER,
+    frame: FRAME_ROUTER,
+    label: 'Router',
+    cost: 10,
+    cost_supply: 1,
+    r: RADIUS_DEFAULT,
+    supply_links: 4,
+  },
+  [TYPE_ASTEROID]: {
+    supply_links: 0,
   },
 };
 
 const buttons = [
+  TYPE_FACTORY,
   TYPE_MINER,
+  TYPE_ROUTER,
 ];
 
 const link_color = {
   [TYPE_ASTEROID]: [pico8.colors[11], pico8.colors[3]],
+  [TYPE_FACTORY]: [pico8.colors[9], pico8.colors[4]],
 };
+link_color[TYPE_ROUTER] = link_color[TYPE_FACTORY];
 
 function entDistSq(a, b) {
   return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
@@ -111,13 +148,29 @@ class Game {
     let num_asteroids = 100;
     let map = this.map = {};
     this.last_id = 0;
+
+    ++this.last_id;
+    map[++this.last_id] = {
+      type: TYPE_FACTORY,
+      frame: FRAME_FACTORY,
+      x: w/2, y: h/2,
+      z: Z[FRAME_FACTORY],
+      w: SPRITE_W, h: SPRITE_W,
+      supply: FACTORY_SUPPLY_MAX,
+      supply_max: FACTORY_SUPPLY_MAX,
+      r: RADIUS_DEFAULT,
+      active: true,
+    };
+
     let total_value = 0;
     for (let ii = 0; ii < num_asteroids; ++ii) {
       let x = rand.floatBetween(0, 1);
-      x = x * x * (rand.range(2) ? -1 : 1);
+      x = x * x + 0.05;
+      x *= (rand.range(2) ? -1 : 1);
       x = x * w / 2 + w / 2;
       let y = rand.floatBetween(0, 1);
-      y = y * y * (rand.range(2) ? -1 : 1);
+      y = y * y + 0.05;
+      y *= (rand.range(2) ? -1 : 1);
       y = y * h / 2 + h / 2;
       ++this.last_id;
       let elem = {
@@ -142,7 +195,7 @@ class Game {
   }
 
   tickWrap() {
-    if (this.paused) {
+    if (this.paused || this.value_mined === this.total_value) {
       return;
     }
     let dt = engine.getFrameDt();
@@ -236,34 +289,46 @@ class Game {
     return links;
   }
 
+  hasSupplyLinks(ent) {
+    let max = ent_types[ent.type].supply_links;
+    if (!max) {
+      return false;
+    }
+    // TODO: limit
+    return ent.active;
+  }
+
   canPlace(param) {
     let selected = this.getSelected(true);
     let elem = ent_types[selected];
     let { map } = this;
     let { r } = elem;
     let { links } = param;
+    let had_asteroid = false;
+    let supply_link = null;
     for (let id in map) {
       let ent = map[id];
       let dist_sq = entDistSq(ent, param);
       if (dist_sq <= (r + ent.r) * (r + ent.r)) {
         return false;
       }
-      if (ent.type === TYPE_ASTEROID && ent.value && dist_sq <= RSQR_ASTERIOD) {
+      if (selected === TYPE_MINER && ent.type === TYPE_ASTEROID && ent.value && dist_sq <= RSQR_ASTERIOD) {
+        had_asteroid = true;
         links.push({ id, dist_sq });
       }
-    }
-    if (selected === TYPE_MINER) {
-      let ok = false;
-      for (let ii = 0; ii < links.length; ++ii) {
-        let ent = map[links[ii].id];
-        if (ent.type === TYPE_ASTEROID) {
-          ok = true;
+      if (dist_sq <= RSQR_SUPPLY && this.hasSupplyLinks(ent)) {
+        if (!supply_link || dist_sq < supply_link.dist_sq) {
+          supply_link = { id, dist_sq };
         }
       }
-      if (!ok) {
-        return false;
-      }
     }
+    if (selected === TYPE_MINER && !had_asteroid) {
+      return false;
+    }
+    if (!supply_link) {
+      return false;
+    }
+    links.push(supply_link);
     return true;
   }
 
@@ -327,14 +392,30 @@ class Game {
     };
     if (selected === TYPE_MINER) {
       elem.time_accum = 0;
-      elem.active = true;
       elem.asteroid_link = seen[TYPE_ASTEROID];
       assert(elem.asteroid_link);
       this.updateMinerFrame(elem);
     }
+    elem.active = true;
     map[++this.last_id] = elem;
     this.money -= cost;
     this.paused = false;
+  }
+
+  availableSupply() {
+    let { map } = this;
+    let avail = 0;
+    let total = 0;
+    for (let key in map) {
+      let ent = map[key];
+      if (ent.supply_max) {
+        total += ent.supply_max;
+        if (ent.active) {
+          avail += ent.supply;
+        }
+      }
+    }
+    return [avail, total];
   }
 }
 
@@ -425,7 +506,7 @@ function drawMap() {
         }
         let w = 1;
         let p = 1;
-        if (elem.active) {
+        if (elem.active && other.type === TYPE_ASTEROID) {
           w += abs(sin(engine.frame_timestamp * 0.008 + elem.seed * PI * 2));
           p = 0.9;
         }
@@ -439,6 +520,7 @@ function drawMap() {
 }
 
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
+const CARD_SUPPLY_Y = CARD_Y + CARD_H - 5;
 
 const HUD_PROGRESS_W = game_width / 4;
 const HUD_PROGRESS_X = (game_width - HUD_PROGRESS_W) / 2;
@@ -492,6 +574,8 @@ function drawHUD() {
           align: font.ALIGN.HVCENTER | font.ALIGN.HWRAP,
         });
       }
+
+      // label
       font.draw({
         color: 0x000000ff,
         x, y: CARD_LABEL_Y,
@@ -500,6 +584,8 @@ function drawHUD() {
         text: ent_type.label,
         align: font.ALIGN.HCENTER,
       });
+
+      // cost
       font.draw({
         color: pico8.font_colors[game.canAfford(type_id) ? 3 : 8],
         x, y: CARD_LABEL_Y + ui.font_height,
@@ -508,15 +594,34 @@ function drawHUD() {
         text: `${ent_type.cost}g`,
         align: font.ALIGN.HCENTER,
       });
+      // cost in supply
+      let { cost_supply } = ent_type;
+      let supply_w = 5;
+      let supply_x = floor((CARD_W - (supply_w + 1) * (cost_supply - 1)) / 2);
+      for (let jj = 0; jj < cost_supply; ++jj) {
+        sprite_space.draw({
+          x: x + supply_x + (supply_w + 1) * jj,
+          y: CARD_SUPPLY_Y,
+          w: 5, h: 5,
+          frame: FRAME_SUPPLY,
+        });
+      }
 
-      let disabled = !game.canAfford(type_id) && game.selected !== type_id;
+      // hotkey
+      let key = String.fromCharCode('1'.charCodeAt(0) + ii);
+      font.draw({
+        x: x + 2 + (ii === 0 ? 1 : 0), y: CARD_Y + 2, w: CARD_W - 4, h: CARD_H - 4,
+        text: key,
+        color: pico8.font_colors[5],
+        align: font.ALIGN.HRIGHT,
+      });
+
       if (ui.button({
         x, y: CARD_Y,
         w: CARD_W, h: CARD_H,
         text: ' ',
         base_name: 'card_button',
-        disabled,
-        hotkey: KEYS[String.fromCharCode('1'.charCodeAt(0) + ii)],
+        hotkey: KEYS[key],
       })) {
         game.selected = game.selected === type_id ? null : type_id;
       }
@@ -541,6 +646,16 @@ function drawHUD() {
     z: Z.UI + 1,
     size: ui.font_height * 2,
     text: `Money: ${game.money}g`,
+  });
+
+  let [supply_cur, supply_max] = game.availableSupply();
+  font.draw({
+    color: pico8.font_colors[3],
+    x: x + 6,
+    y: CARD_Y + 6 + ui.font_height * 2,
+    z: Z.UI + 1,
+    size: ui.font_height * 2,
+    text: `Supply: ${supply_cur} / ${supply_max}`,
   });
 
   let y = 2;

@@ -16,26 +16,27 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
   X miners change color
   X miners show dig arrow sprite too
 * Next: simulation functionality:
-  * Second unit: Generator, generates power
-    * Energy is stored up to some partial capacity (so building can start immediately, if there was power left)
-  * Building takes energy
-  * Mining takes energy
-  * Probably: can select ents and see their status: current+max energy, value left on asteroids, etc
+  * Second unit: Factory, generates supplies
+    * Supplies are stored up to some partial capacity (so building can start immediately, if there was any left)
+  * Building takes supplies
+  * Mining takes supplies
+  * Do not allow supply links overlapping nodes, or nodes placed over links
+    * supply links maybe don't get stored per-ent?
+  * Probably: can select ents and see their status: current+max supply, value left on asteroids, etc
   * Build graph nodes
 * Progress
   * Show progress to completing the whole level, show time elapsed
-* Next unit: other energy generator (cheap, cannot be tightly packed)?
+* Next unit: other supply generator (cheap, cannot be tightly packed)?
 * Then: waves of enemies?  Is this fun already, how much time is left? =)
 * Unit ideas:
   * Major miner
-  * Weapons Battery / Build Battery (just stores energy only to be released for weapons/building)
-  * Laser
+  * Weapons Storage / Build Storage (just stores supplies only to be released for weapons/building)
+  * Laser/MG
   * Missile
   * Cannon
-  * Shield
   * Repair
 * Alternative skin: Dwarves
-  * Energy is dwarves, dwarves get sent to work the mines, man the forts, etc
+  * Supply is dwarves, dwarves get sent to work the mines, man the forts, etc
 
 Original brainstorming:
 * 10 Second RTS

@@ -12,13 +12,18 @@ import * as pico8 from 'glov/client/pico8.js';
 import { createSprite } from 'glov/client/sprites.js';
 import * as ui from 'glov/client/ui.js';
 import { mashString, randCreate } from 'glov/common/rand_alea.js';
-import { ridx } from 'glov/common/util.js';
+import {
+  lineCircleIntersect,
+  lineLineIntersect,
+  ridx,
+} from 'glov/common/util.js';
 import {
   v2addScale,
   v2copy,
   v2dist,
   v2iNormalize,
   v2iRound,
+  v2set,
   v2sub,
   v3copy,
   v3set,
@@ -144,7 +149,7 @@ const ent_types = {
     cost: 10,
     cost_supply: 1,
     supply_max: 0,
-    r: RADIUS_DEFAULT,
+    r: 3,
     max_links: 4,
   },
   [TYPE_ASTEROID]: {
@@ -170,11 +175,22 @@ function cmpDistSq(a, b) {
   return a.dist_sq - b.dist_sq;
 }
 
+function cmpDistSqAllowed(a, b) {
+  if (a.allowed && !b.allowed) {
+    return -1;
+  }
+  if (b.allowed && !a.allowed) {
+    return 1;
+  }
+  return a.dist_sq - b.dist_sq;
+}
+
 function cmpID(a, b) {
   return a.id < b.id ? -1 : 1;
 }
 
 let delta = vec2();
+let temp_pos = vec2();
 
 class Game {
 
@@ -646,14 +662,41 @@ class Game {
     return count < mx;
   }
 
+  linkAllowed(pos0, target) {
+    let { map, supply_links } = this;
+    for (let id in map) {
+      let ent = map[id];
+      if (ent === target) {
+        continue;
+      }
+      if (lineCircleIntersect(pos0, target.pos, ent.pos, ent.r)) {
+        return false;
+      }
+    }
+    for (let ii = 0; ii < supply_links.length; ++ii) {
+      let link = supply_links[ii];
+      let a = map[link[0]];
+      let b = map[link[1]];
+      if (a === target || b === target) {
+        continue;
+      }
+      if (lineLineIntersect(a.pos, b.pos, pos0, target.pos)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   canPlace(param) {
     let selected = this.getSelected(true);
     let elem = ent_types[selected];
-    let { map } = this;
+    let { map, supply_links } = this;
     let { r } = elem;
     let { links } = param;
+    v2set(temp_pos, param.x, param.y);
     let had_asteroid = false;
-    let supply_links = [];
+    let new_supply_links = [];
+    let any_allowed_supply = false;
     for (let id in map) {
       id = Number(id);
       let ent = map[id];
@@ -663,27 +706,36 @@ class Game {
       }
       if (selected === TYPE_MINER && ent.type === TYPE_ASTEROID && ent.value && dist_sq <= RSQR_ASTERIOD) {
         had_asteroid = true;
-        links.push({ id, dist_sq });
+        links.push({ id, dist_sq, allowed: true });
       }
       if (dist_sq <= RSQR_SUPPLY && this.hasSupplyLinks(ent)) {
         if (ent.max_links === 1 && elem.max_links === 1) {
           // never connect two leaves
         } else {
-          supply_links.push({ id, dist_sq });
+          if (this.linkAllowed(temp_pos, ent)) {
+            new_supply_links.push({ id, dist_sq, allowed: true });
+            any_allowed_supply = true;
+          } else {
+            new_supply_links.push({ id, dist_sq, allowed: false });
+          }
         }
       }
     }
+    for (let ii = 0; ii < supply_links.length; ++ii) {
+      let link = supply_links[ii];
+      if (lineCircleIntersect(map[link[0]].pos, map[link[1]].pos, temp_pos, r)) {
+        return false;
+      }
+    }
+
     if (selected === TYPE_MINER && !had_asteroid) {
       return false;
     }
-    if (!supply_links.length) {
-      return false;
+    new_supply_links.sort(cmpDistSqAllowed);
+    for (let ii = 0; ii < min(new_supply_links.length, elem.max_links); ++ii) {
+      links.push(new_supply_links[ii]);
     }
-    supply_links.sort(cmpDistSq);
-    for (let ii = 0; ii < min(supply_links.length, elem.max_links); ++ii) {
-      links.push(supply_links[ii]);
-    }
-    return true;
+    return any_allowed_supply;
   }
 
   updateMinerFrame(miner) {
@@ -748,7 +800,10 @@ class Game {
     let asteroid_link;
     // Find first of any given type
     links.forEach((a) => {
-      let { id, dist_sq } = a;
+      let { id, dist_sq, allowed } = a;
+      if (!allowed) {
+        return;
+      }
       let asteroid = map[id];
       if (asteroid.type === TYPE_ASTEROID) {
         if (!asteroid_link) {
@@ -824,29 +879,31 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
       frame: ent_types[selected].frame,
       color: place_color,
     };
-    if (can_place && can_afford) {
-      let { links } = place_param;
-      links.sort(cmpDistSq);
-      let seen = {};
-      for (let ii = 0; ii < links.length; ++ii) {
-        let link = links[ii];
-        let ent = map[link.id];
-        let is_first = !seen[ent.type];
-        let color;
-        if (ent.type === TYPE_ASTEROID) {
-          if (is_first) {
-            miner.asteroid_link = link.id;
-            miner.active = true;
-            miner.exhausted = false;
-            game.updateMinerFrame(miner);
-          }
-          color = link_color_asteroid[is_first ? 0 : 1];
-        } else {
-          color = link_color_supply[0];
+    let { links } = place_param;
+    links.sort(cmpDistSq);
+    let seen = {};
+    for (let ii = 0; ii < links.length; ++ii) {
+      let link = links[ii];
+      let ent = map[link.id];
+      let is_first = !seen[ent.type];
+      let color;
+      if (ent.type === TYPE_ASTEROID) {
+        if (is_first) {
+          miner.asteroid_link = link.id;
+          miner.active = true;
+          miner.exhausted = false;
+          game.updateMinerFrame(miner);
         }
-        seen[ent.type] = true;
-        ui.drawLine(x, y, ent.x, ent.y, Z.LINKS + (is_first ? 2 : 1), 1, 1, color);
+        color = link_color_asteroid[is_first ? 0 : 1];
+      } else if (!link.allowed) {
+        color = pico8.colors[8];
+      } else {
+        color = link_color_supply[0];
       }
+      seen[ent.type] = true;
+      ui.drawLine(x, y, ent.x, ent.y, Z.LINKS + (is_first ? 2 : 1), 1, 1, color);
+    }
+    if (can_place && can_afford) {
       if (input.click({ max_dist: Infinity })) {
         game.place(place_param);
         ui.playUISound('button_click');

@@ -28,9 +28,8 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
     X On 10 second tick:
       X In a round robin fashion, add an order to send a packet to every unit who can fit any additional supply, at most 1 per unit
       * probably priority of: building > weapons > miners
-  * Supplies travel on links
-  * Do not allow supply links overlapping nodes, or nodes placed over links
-    * supply links maybe don't get stored per-ent?
+  X Supplies travel on links
+  X Do not allow supply links overlapping nodes, or nodes placed over links
   * Can select ents and see their status: current+max supply, value left on asteroids, etc
     * Also, scrap them
 * Factories should visually count up to 10 somehow

@@ -41,7 +41,7 @@ import {
   sprite_space,
 } from './img/space.js';
 
-const { PI, abs, min, random, round, sin, floor } = Math;
+const { PI, abs, ceil, max, min, random, round, sin, floor } = Math;
 
 const TYPE_MINER = 'miner';
 const TYPE_ASTEROID = 'asteroid';
@@ -128,6 +128,7 @@ const ent_types = {
     supply_max: 1,
     r: RADIUS_DEFAULT,
     mine_rate: 1000/8, // millisecond per ore
+    supply_rate: 1/10000, // supply per millisecond
   },
   [TYPE_ROUTER]: {
     type: TYPE_ROUTER,
@@ -179,6 +180,8 @@ class Game {
     ent.pos = vec2(ent.x, ent.y);
     ent.supply = ent.supply || 0;
     ent.supply_max = ent_type.supply_max;
+    ent.supply_enroute = false;
+    ent.supply_source = ent_type.supply_source;
     this.map[++this.last_id] = ent;
     ent.id = this.last_id;
     return ent;
@@ -232,6 +235,9 @@ class Game {
       return;
     }
     let dt = engine.getFrameDt();
+    if (engine.DEBUG && input.keyDown(KEYS.SHIFT)) {
+      dt *= 10;
+    }
     while (dt > 16) {
       this.tick(16);
       dt -= 16;
@@ -242,41 +248,39 @@ class Game {
   activateMiner(ent) {
     let links = this.findAsteroidLinks(ent);
     if (!links.length) {
-      ent.active = false;
+      ent.asteroid_link = null;
+      ent.exhausted = true;
+      ent.supply = ent.supply_max = 0;
       ent.rot = 0;
       ent.frame = FRAME_MINERDONE;
-      return;
+      return false;
     }
     links.sort(cmpDistSq);
     ent.asteroid_link = links[0].id;
     this.updateMinerFrame(ent);
-    //asteroid = this.map[ent.asteroid_link];
+    return true;
   }
 
   updateMiner(ent, dt) {
-    if (!ent.asteroid_link) {
+    if (ent.exhausted || !ent.active) {
       return;
     }
     let asteroid = this.map[ent.asteroid_link];
     if (!asteroid.value) {
-      ent.asteroid_link = null;
-      let links = this.findAsteroidLinks(ent);
-      if (!links.length) {
-        ent.active = false;
-        ent.rot = 0;
-        ent.frame = FRAME_MINERDONE;
-        return;
-      }
-      links.sort(cmpDistSq);
-      ent.asteroid_link = links[0].id;
-      this.updateMinerFrame(ent);
+      this.activateMiner(ent);
       asteroid = this.map[ent.asteroid_link];
     }
+    if (!ent.supply) {
+      return;
+    }
     ent.time_accum += dt;
-    let rate = ent_types[ent.type].mine_rate;
+    let rate = ent_types[ent.type].mine_rate; // ms per ore
+    let { supply_rate } = ent_types[ent.type]; // supply per ms
     let mined = floor(ent.time_accum / rate);
     if (mined >= 1) {
       mined = min(mined, asteroid.value);
+      let supply_limit = ceil(ent.supply / supply_rate / rate);
+      mined = min(mined, supply_limit);
       asteroid.value -= mined;
       this.value_mined += mined;
       if (!asteroid.value) {
@@ -285,7 +289,12 @@ class Game {
       }
       this.money += mined;
 
+      ent.supply = max(0, ent.supply - mined * rate * supply_rate);
       ent.time_accum -= mined * rate;
+      if (!ent.supply) {
+        ent.time_accum = 0;
+        this.updateMinerFrame(ent);
+      }
     }
   }
 
@@ -295,7 +304,7 @@ class Game {
     let { map } = this;
     for (let key in map) {
       let other = map[key];
-      if (other.active && other.supply) {
+      if (other.active && other.supply && other.supply_source) {
         return other;
       }
     }
@@ -315,20 +324,36 @@ class Game {
       speed: PACKET_SPEED,
       pos: [source.x, source.y],
     });
+    target.supply_enroute = true;
   }
 
-  updateBuilding(ent) {
-    let { building } = ent;
-    if (building.supply_enroute) {
-      return;
-    }
+  pullSupply(ent) {
     // find supply to send
     let source = this.findSupplySource(ent);
     if (!source) {
       return;
     }
     this.emitSupply(source, ent);
-    building.supply_enroute = true;
+  }
+
+  updateBuilding(ent) {
+    let { supply_enroute } = ent;
+    if (supply_enroute) {
+      return;
+    }
+    this.pullSupply(ent);
+  }
+
+  buildingFinished(ent) {
+    ent.building = null;
+    ent.frame = ent_types[ent.type].frame;
+    if (ent.type === TYPE_MINER) {
+      if (this.activateMiner(ent)) {
+        this.pullSupply(ent);
+      }
+    } else if (ent.supply_max) {
+      this.pullSupply(ent);
+    }
   }
 
   updatePacket(packet, dt) {
@@ -346,21 +371,20 @@ class Game {
     }
 
     // arrived!
+    target.supply_enroute = false;
     let { building } = target;
     if (building) {
       target.building_est = target.building;
-      building.supply_enroute = false;
       building.progress++;
       if (building.progress === building.required) {
-        target.building = null;
         target.active = true;
-        target.frame = ent_types[target.type].frame;
-        if (target.type === TYPE_MINER) {
-          this.activateMiner(target);
-        }
+        this.buildingFinished(target);
       }
     } else {
       target.supply = min(target.supply + 1, target.supply_max);
+      if (target.type === TYPE_MINER) {
+        this.activateMiner(target);
+      }
     }
     return true;
   }
@@ -376,6 +400,12 @@ class Game {
       }
     }
     // Send to those in need
+    for (let key in map) {
+      let ent = map[key];
+      if (ent.active && ent.supply_max && ent.supply < ent.supply_max) {
+        this.pullSupply(ent);
+      }
+    }
   }
 
   tick(dt) {
@@ -433,8 +463,8 @@ class Game {
   }
 
   hasSupplyLinks(ent) {
-    let max = ent_types[ent.type].supply_links;
-    if (!max) {
+    let mx = ent_types[ent.type].supply_links;
+    if (!mx) {
       return false;
     }
     // TODO: limit
@@ -476,6 +506,14 @@ class Game {
   }
 
   updateMinerFrame(miner) {
+    if (miner.exhausted) {
+      return;
+    }
+    if (!miner.supply) {
+      miner.frame = FRAME_MINER;
+      miner.rot = 0;
+      return;
+    }
     let asteroid = this.map[miner.asteroid_link];
     let dx = asteroid.x - miner.x;
     let dy = asteroid.y - miner.y;
@@ -542,6 +580,7 @@ class Game {
     });
     if (selected === TYPE_MINER) {
       elem.time_accum = 0;
+      elem.exhausted = false;
       //elem.asteroid_link = asteroid_link;
       //assert(elem.asteroid_link);
       //this.updateMinerFrame(elem);
@@ -556,7 +595,7 @@ class Game {
     let total = 0;
     for (let key in map) {
       let ent = map[key];
-      if (ent.supply_max && ent_types[ent.type].supply_source) {
+      if (ent.supply_max && ent.supply_source) {
         total += ent.supply_max;
         if (ent.active) {
           avail += ent.supply;
@@ -610,6 +649,8 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
         let is_first = !seen[ent.type];
         if (is_first && ent.type === TYPE_ASTEROID) {
           miner.asteroid_link = link.id;
+          miner.active = true;
+          miner.exhausted = false;
           game.updateMinerFrame(miner);
         }
         seen[ent.type] = true;
@@ -645,6 +686,13 @@ function drawMap(dt) {
   for (let key in map) {
     let elem = map[key];
     sprite_space.draw(elem);
+    // if (elem.supply) {
+    //   font.draw({
+    //     x: elem.x,
+    //     y: elem.y,
+    //     text: `${elem.supply}`,
+    //   });
+    // }
     let { asteroid_link, building_est } = elem;
     if (building_est) {
       let { progress, required } = building_est;
@@ -663,12 +711,14 @@ function drawMap(dt) {
       let other = map[asteroid_link];
       let w = 1;
       let p = 1;
-      if (elem.active && other.type === TYPE_ASTEROID) {
+      let active_color = 1;
+      if (elem.supply) {
         w += abs(sin(engine.frame_timestamp * 0.008 + elem.vis_seed * PI * 2));
         p = 0.9;
+        active_color = 0;
       }
       ui.drawLine(elem.x, elem.y, other.x, other.y, Z.LINKS, w, p,
-        link_color[other.type][0]);
+        link_color[other.type][active_color]);
     }
   }
   for (let ii = 0; ii < supply_links.length; ++ii) {

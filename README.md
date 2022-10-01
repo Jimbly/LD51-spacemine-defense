@@ -19,7 +19,7 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
   X Second unit: Factory, generates supplies
     X Supplies are stored up to some partial capacity (so building can start immediately, if there was any left)
   X Building takes supplies
-  * Mining takes supplies
+  X Mining takes supplies
   * Supply links have an active state
   * Supplies travel on links
   * Rules:

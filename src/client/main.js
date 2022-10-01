@@ -22,11 +22,14 @@ import {
 
 const { PI, abs, min, sin, floor } = Math;
 
+const TYPE_MINER = 'miner';
+const TYPE_ASTEROID = 'asteroid';
+
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
 Z.SPRITES = 10;
-Z[FRAME_ASTEROID] = 10;
 Z[FRAME_ASTEROID_EMPTY] = 9;
+Z[FRAME_ASTEROID] = 10;
 Z.LINKS = 15;
 Z[FRAME_MINER] = 20;
 Z.PLACE_PREVIEW = 30;
@@ -61,12 +64,13 @@ function init() {
   v4set(ui.color_panel, 1, 1, 1, 1);
 }
 
-const RADIUS_DEFAULT = 5;
+const RADIUS_DEFAULT = 4.5;
 const RADIUS_LINK_ASTEROID = SPRITE_W * 2;
 const RSQR_ASTERIOD = RADIUS_LINK_ASTEROID * RADIUS_LINK_ASTEROID;
 
 const ent_types = {
-  [FRAME_MINER]: {
+  [TYPE_MINER]: {
+    type: TYPE_MINER,
     frame: FRAME_MINER,
     label: 'Miner',
     cost: 100,
@@ -76,11 +80,11 @@ const ent_types = {
 };
 
 const buttons = [
-  FRAME_MINER,
+  TYPE_MINER,
 ];
 
 const link_color = {
-  [FRAME_ASTEROID]: [pico8.colors[11], pico8.colors[3]],
+  [TYPE_ASTEROID]: [pico8.colors[11], pico8.colors[3]],
 };
 
 function entDistSq(a, b) {
@@ -107,6 +111,7 @@ class Game {
       y = y * y * (rand.range(2) ? -1 : 1);
       y = y * h / 2 + h / 2;
       map[++this.last_id] = {
+        type: TYPE_ASTEROID,
         frame: FRAME_ASTEROID,
         x, y,
         z: Z[FRAME_ASTEROID],
@@ -117,7 +122,7 @@ class Game {
       };
     }
     this.money = 500;
-    this.selected = engine.DEBUG ? FRAME_MINER : null;
+    this.selected = engine.DEBUG ? TYPE_MINER : null;
     this.tick_counter = 0;
   }
 
@@ -136,7 +141,7 @@ class Game {
     }
     let asteroid = this.map[ent.asteroid_link];
     if (!asteroid.value) {
-      ent.links = ent.links.filter((a) => a !== ent.asteroid_link);
+      ent.links = ent.links.filter((a) => a.id !== ent.asteroid_link);
       ent.asteroid_link = null;
       let links = this.findAsteroidLinks(ent);
       if (!links.length) {
@@ -149,7 +154,7 @@ class Game {
       asteroid = this.map[ent.asteroid_link];
     }
     ent.time_accum += dt;
-    let rate = ent_types[ent.frame].mine_rate;
+    let rate = ent_types[ent.type].mine_rate;
     let mined = floor(ent.time_accum / rate);
     if (mined >= 1) {
       mined = min(mined, asteroid.value);
@@ -182,15 +187,15 @@ class Game {
     }
   }
 
-  getSelected() {
-    if (this.canAfford(this.selected)) {
+  getSelected(ignore_afford) {
+    if (ignore_afford || this.canAfford(this.selected)) {
       return this.selected;
     }
     return null;
   }
 
-  canAfford(frame) {
-    return ent_types[frame]?.cost <= this.money;
+  canAfford(ent_type) {
+    return ent_types[ent_type]?.cost <= this.money;
   }
 
   findAsteroidLinks(from_ent) {
@@ -202,7 +207,7 @@ class Game {
         continue;
       }
       let dist_sq = entDistSq(ent, from_ent);
-      if (ent.frame === FRAME_ASTEROID && ent.value && dist_sq <= RSQR_ASTERIOD) {
+      if (ent.type === TYPE_ASTEROID && ent.value && dist_sq <= RSQR_ASTERIOD) {
         links.push({ id, dist_sq });
       }
     }
@@ -210,7 +215,10 @@ class Game {
   }
 
   canPlace(param) {
-    let selected = this.getSelected();
+    let selected = this.getSelected(false);
+    if (!selected) {
+      return false; // can't afford
+    }
     let elem = ent_types[selected];
     let { map } = this;
     let { r } = elem;
@@ -221,15 +229,15 @@ class Game {
       if (dist_sq <= (r + ent.r) * (r + ent.r)) {
         return false;
       }
-      if (ent.frame === FRAME_ASTEROID && dist_sq <= RSQR_ASTERIOD) {
+      if (ent.type === TYPE_ASTEROID && ent.value && dist_sq <= RSQR_ASTERIOD) {
         links.push({ id, dist_sq });
       }
     }
-    if (selected === FRAME_MINER) {
+    if (selected === TYPE_MINER) {
       let ok = false;
       for (let ii = 0; ii < links.length; ++ii) {
         let ent = map[links[ii].id];
-        if (ent.frame === FRAME_ASTEROID) {
+        if (ent.type === TYPE_ASTEROID) {
           ok = true;
         }
       }
@@ -251,13 +259,14 @@ class Game {
     let use_links = links.filter((a) => {
       let { id } = a;
       let ent = map[id];
-      if (seen[ent.frame]) {
+      if (seen[ent.type]) {
         return false;
       }
-      seen[ent.frame] = id;
+      seen[ent.type] = id;
       return true;
     });
     let elem = {
+      type: selected,
       frame, x, y, z: Z[frame],
       w: SPRITE_W, h: SPRITE_W,
       rot: 0,
@@ -265,10 +274,10 @@ class Game {
       links: use_links,
       seed: this.rand.random(),
     };
-    if (frame === FRAME_MINER) {
+    if (selected === TYPE_MINER) {
       elem.time_accum = 0;
       elem.active = true;
-      elem.asteroid_link = seen[FRAME_ASTEROID];
+      elem.asteroid_link = seen[TYPE_ASTEROID];
       assert(elem.asteroid_link);
     }
     map[++this.last_id] = elem;
@@ -283,6 +292,44 @@ function playInit() {
 }
 
 let mouse_pos = vec2();
+function drawGhost(viewx0, viewy0, viewx1, viewy1) {
+  let { map } = game;
+  let selected = game.getSelected(true);
+  if (selected !== null) {
+    //let can_afford = game.canAfford(selected);
+    input.mousePos(mouse_pos);
+    v2iRound(mouse_pos);
+    let x = mouse_pos[0];
+    let y = mouse_pos[1];
+    let place_param = { x, y, links: [] };
+    let can_place = game.canPlace(place_param) && x >= viewx0 && x < viewx1 && y >= viewy0 && y < viewy1;
+    sprite_space.draw({
+      x, y, z: Z.PLACE_PREVIEW,
+      w: SPRITE_W,
+      h: SPRITE_W,
+      frame: ent_types[selected].frame,
+      color: can_place ? undefined : [1,0,1,1],
+    });
+    if (can_place) {
+      let { links } = place_param;
+      links.sort(cmpDistSq);
+      let seen = {};
+      for (let ii = 0; ii < links.length; ++ii) {
+        let link = links[ii];
+        let ent = map[link.id];
+        let is_first = !seen[ent.type];
+        seen[ent.type] = true;
+        ui.drawLine(x, y, ent.x, ent.y, Z.LINKS + (is_first ? 2 : 1), 1, 1,
+          link_color[ent.type][is_first ? 0 : 1]);
+      }
+      if (input.click()) {
+        game.place(place_param);
+        ui.playUISound('button_click');
+      }
+    }
+  }
+}
+
 function drawMap() {
   gl.clearColor(0,0,0,1);
   let viewx0 = 0;
@@ -305,7 +352,7 @@ function drawMap() {
       for (let ii = 0; ii < links.length; ++ii) {
         let link = links[ii];
         let other = map[link.id];
-        let color = link_color[other.frame];
+        let color = link_color[other.type];
         if (!color) {
           // dead link
           continue;
@@ -317,44 +364,12 @@ function drawMap() {
           p = 0.9;
         }
         ui.drawLine(elem.x, elem.y, other.x, other.y, Z.LINKS, w, p,
-          link_color[other.frame][0]);
+          link_color[other.type][0]);
       }
     }
   }
 
-  let selected = game.getSelected();
-  if (selected !== null) {
-    input.mousePos(mouse_pos);
-    v2iRound(mouse_pos);
-    let x = mouse_pos[0];
-    let y = mouse_pos[1];
-    let place_param = { x, y, links: [] };
-    let can_place = game.canPlace(place_param) && x >= viewx0 && x < viewx1 && y >= viewy0 && y < viewy1;
-    sprite_space.draw({
-      x, y, z: Z.PLACE_PREVIEW,
-      w: SPRITE_W,
-      h: SPRITE_W,
-      frame: ent_types[selected].frame,
-      color: can_place ? undefined : [1,0,1,1],
-    });
-    if (can_place) {
-      let { links } = place_param;
-      links.sort(cmpDistSq);
-      let seen = {};
-      for (let ii = 0; ii < links.length; ++ii) {
-        let link = links[ii];
-        let ent = map[link.id];
-        let is_first = !seen[ent.frame];
-        seen[ent.frame] = true;
-        ui.drawLine(x, y, ent.x, ent.y, Z.LINKS + (is_first ? 2 : 1), 1, 1,
-          link_color[ent.frame][is_first ? 0 : 1]);
-      }
-      if (input.click()) {
-        game.place(place_param);
-        ui.playUISound('button_click');
-      }
-    }
-  }
+  drawGhost(viewx0, viewy0, viewx1, viewy1);
 }
 
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
@@ -367,8 +382,9 @@ function drawHUD() {
   let selected = game.getSelected();
   for (let ii = 0; ii < NUM_CARDS; ++ii) {
     if (ii < buttons.length) {
-      let frame = buttons[ii];
-      let ent_type = ent_types[frame];
+      let type_id = buttons[ii];
+      let ent_type = ent_types[type_id];
+      let { frame } = ent_type;
       sprite_space.draw({
         frame,
         x: x + CARD_ICON_X + floor(CARD_ICON_W/2),
@@ -378,7 +394,7 @@ function drawHUD() {
         z: Z.UI + 2
       });
 
-      if (game.selected === frame) {
+      if (game.selected === type_id) {
         font.draw({
           color: pico8.font_colors[selected === null ? 8 : 10],
           x, y: CARD_Y + CARD_ICON_X,
@@ -398,7 +414,7 @@ function drawHUD() {
         align: font.ALIGN.HCENTER,
       });
       font.draw({
-        color: pico8.font_colors[game.canAfford(frame) ? 3 : 8],
+        color: pico8.font_colors[game.canAfford(type_id) ? 3 : 8],
         x, y: CARD_LABEL_Y + ui.font_height,
         z: Z.UI + 3,
         w: CARD_W,
@@ -411,9 +427,9 @@ function drawHUD() {
         w: CARD_W, h: CARD_H,
         text: ' ',
         base_name: 'card_button',
-        disabled: !game.canAfford(frame) && game.selected !== frame,
+        disabled: !game.canAfford(type_id) && game.selected !== type_id,
       })) {
-        game.selected = game.selected === frame ? null : frame;
+        game.selected = game.selected === type_id ? null : type_id;
       }
     }
     // ui.panel({

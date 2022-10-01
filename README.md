@@ -10,9 +10,11 @@ Start with: `npm start` (after running `npm i` once)
 
 
 The 10 Second Space Game
-* Field of asteroids
-* First unit: minor miner
-* Select miner, place on map, builds instantly, minerals start coming in, asteroids get depleted, miners change color
+X Field of asteroids
+X First unit: minor miner
+X Select miner, place on map, builds instantly, minerals start coming in, asteroids get depleted
+  * miners change color
+  * miners show dig arrow sprite too
 * Next: simulation functionality:
   * Second unit: Core, generates power, and build packets
   * Building takes build packets

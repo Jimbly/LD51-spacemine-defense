@@ -20,6 +20,11 @@ X Select miner, place on map, builds instantly, minerals start coming in, astero
     * Supplies are stored up to some partial capacity (so building can start immediately, if there was any left)
   * Building takes supplies
   * Mining takes supplies
+  * Rules:
+    * Units that are building: grab a packet whenever one is available and none are in flight
+    * On 10 second tick:
+      * Send one packet to each building unit that does not have one in flight (will only happen if we were out of supply)
+      * Initially figure out how many packets each unit needs to get to max, send round robin to those
   * Do not allow supply links overlapping nodes, or nodes placed over links
     * supply links maybe don't get stored per-ent?
   * Probably: can select ents and see their status: current+max supply, value left on asteroids, etc

@@ -3,7 +3,7 @@
 const local_storage = require('glov/client/local_storage.js');
 local_storage.setStoragePrefix('glovjs-playground'); // Before requiring anything else that might load from this
 
-import assert from 'assert';
+//import assert from 'assert';
 import * as camera2d from 'glov/client/camera2d.js';
 import * as engine from 'glov/client/engine.js';
 import * as input from 'glov/client/input.js';
@@ -12,21 +12,36 @@ import * as pico8 from 'glov/client/pico8.js';
 import { createSprite } from 'glov/client/sprites.js';
 import * as ui from 'glov/client/ui.js';
 import { mashString, randCreate } from 'glov/common/rand_alea.js';
-import { v2iRound, v3copy, v3set, v4set, vec2, vec4 } from 'glov/common/vmath.js';
+import { ridx } from 'glov/common/util.js';
+import {
+  v2addScale,
+  v2dist,
+  v2iNormalize,
+  v2iRound,
+  v2sub,
+  v3copy,
+  v3set,
+  v4set,
+  vec2,
+  vec4,
+} from 'glov/common/vmath.js';
 import {
   FRAME_ASTEROID,
   FRAME_ASTEROID_EMPTY,
   FRAME_FACTORY,
+  FRAME_FACTORY_BUILDING,
   FRAME_MINER,
   FRAME_MINERDONE,
   FRAME_MINERUL,
   FRAME_MINERUP,
+  FRAME_MINER_BUILDING,
   FRAME_ROUTER,
+  FRAME_ROUTER_BUILDING,
   FRAME_SUPPLY,
   sprite_space,
 } from './img/space.js';
 
-const { PI, abs, min, round, sin, floor } = Math;
+const { PI, abs, min, random, round, sin, floor } = Math;
 
 const TYPE_MINER = 'miner';
 const TYPE_ASTEROID = 'asteroid';
@@ -34,6 +49,7 @@ const TYPE_FACTORY = 'factory';
 const TYPE_ROUTER = 'router';
 
 const FACTORY_SUPPLY_MAX = 10;
+const PACKET_SPEED = 100/1000; // pixels per millisecond
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -41,6 +57,7 @@ Z.SPRITES = 10;
 Z[FRAME_ASTEROID_EMPTY] = 9;
 Z[FRAME_ASTEROID] = 10;
 Z.LINKS = 15;
+Z.SUPPLY = 17;
 Z[FRAME_MINERDONE] = 20;
 Z[FRAME_MINER] = 20;
 Z[FRAME_MINERUP] = 21;
@@ -90,32 +107,40 @@ const ent_types = {
   [TYPE_FACTORY]: {
     type: TYPE_FACTORY,
     frame: FRAME_FACTORY,
+    frame_building: FRAME_FACTORY_BUILDING,
     label: 'Factory',
     cost: 800,
     cost_supply: 7,
     r: RADIUS_DEFAULT,
-    suppy_max: 10, // every 10 seconds
+    supply_prod: 5, // every 10 seconds
+    supply_max: 5,
     supply_links: Infinity,
+    supply_source: true,
   },
   [TYPE_MINER]: {
     type: TYPE_MINER,
     frame: FRAME_MINER,
+    frame_building: FRAME_MINER_BUILDING,
     label: 'Miner',
     cost: 100,
     cost_supply: 3,
+    supply_max: 1,
     r: RADIUS_DEFAULT,
     mine_rate: 1000/8, // millisecond per ore
   },
   [TYPE_ROUTER]: {
     type: TYPE_ROUTER,
     frame: FRAME_ROUTER,
+    frame_building: FRAME_ROUTER_BUILDING,
     label: 'Router',
     cost: 10,
     cost_supply: 1,
+    supply_max: 0,
     r: RADIUS_DEFAULT,
     supply_links: 4,
   },
   [TYPE_ASTEROID]: {
+    frame: FRAME_ASTEROID,
     supply_links: 0,
   },
 };
@@ -126,11 +151,12 @@ const buttons = [
   TYPE_ROUTER,
 ];
 
+const link_color_supply = [pico8.colors[9], pico8.colors[4]];
 const link_color = {
   [TYPE_ASTEROID]: [pico8.colors[11], pico8.colors[3]],
-  [TYPE_FACTORY]: [pico8.colors[9], pico8.colors[4]],
+  [TYPE_FACTORY]: link_color_supply,
+  [TYPE_ROUTER]: link_color_supply,
 };
-link_color[TYPE_ROUTER] = link_color[TYPE_FACTORY];
 
 function entDistSq(a, b) {
   return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
@@ -141,26 +167,36 @@ function cmpDistSq(a, b) {
 }
 
 class Game {
+
+  addEnt(ent) {
+    ent.frame = ent.frame || ent_types[ent.type].frame;
+    ent.w = ent.w || SPRITE_W;
+    ent.h = ent.h || SPRITE_W;
+    ent.z = ent.z || Z[ent.frame];
+    ent.r = ent.r || ent_types[ent.type].r || RADIUS_DEFAULT;
+    ent.pos = vec2(ent.x, ent.y);
+    this.map[++this.last_id] = ent;
+    ent.id = this.last_id;
+    return ent;
+  }
+
   constructor(seed) {
     let w = this.w = 720;
     let h = this.h = 400;
     let rand = this.rand = randCreate(mashString(seed));
     let num_asteroids = 100;
-    let map = this.map = {};
+    this.map = {};
+    this.supply_links = [];
+    this.packets = [];
     this.last_id = 0;
 
-    ++this.last_id;
-    map[++this.last_id] = {
+    this.addEnt({
       type: TYPE_FACTORY,
-      frame: FRAME_FACTORY,
       x: w/2, y: h/2,
-      z: Z[FRAME_FACTORY],
-      w: SPRITE_W, h: SPRITE_W,
       supply: FACTORY_SUPPLY_MAX,
       supply_max: FACTORY_SUPPLY_MAX,
-      r: RADIUS_DEFAULT,
       active: true,
-    };
+    });
 
     let total_value = 0;
     for (let ii = 0; ii < num_asteroids; ++ii) {
@@ -172,19 +208,13 @@ class Game {
       y = y * y + 0.05;
       y *= (rand.range(2) ? -1 : 1);
       y = y * h / 2 + h / 2;
-      ++this.last_id;
-      let elem = {
+      let ent = this.addEnt({
         type: TYPE_ASTEROID,
-        frame: FRAME_ASTEROID,
         x, y,
-        z: Z[FRAME_ASTEROID],
-        w: SPRITE_W, h: SPRITE_W,
         rot: rand.random() * PI * 2,
         value: 500 + rand.range(1000),
-        r: RADIUS_DEFAULT,
-      };
-      map[this.last_id] = elem;
-      total_value += elem.value;
+      });
+      total_value += ent.value;
     }
     this.value_mined = 0;
     this.total_value = total_value;
@@ -206,13 +236,26 @@ class Game {
     this.tick(dt);
   }
 
+  activateMiner(ent) {
+    let links = this.findAsteroidLinks(ent);
+    if (!links.length) {
+      ent.active = false;
+      ent.rot = 0;
+      ent.frame = FRAME_MINERDONE;
+      return;
+    }
+    links.sort(cmpDistSq);
+    ent.asteroid_link = links[0].id;
+    this.updateMinerFrame(ent);
+    //asteroid = this.map[ent.asteroid_link];
+  }
+
   updateMiner(ent, dt) {
     if (!ent.asteroid_link) {
       return;
     }
     let asteroid = this.map[ent.asteroid_link];
     if (!asteroid.value) {
-      ent.links = ent.links.filter((a) => a.id !== ent.asteroid_link);
       ent.asteroid_link = null;
       let links = this.findAsteroidLinks(ent);
       if (!links.length) {
@@ -222,7 +265,6 @@ class Game {
         return;
       }
       links.sort(cmpDistSq);
-      ent.links.push(links[0]);
       ent.asteroid_link = links[0].id;
       this.updateMinerFrame(ent);
       asteroid = this.map[ent.asteroid_link];
@@ -244,20 +286,114 @@ class Game {
     }
   }
 
+  findSupplySource(ent) {
+    // TODO: nearest by link distance
+    let { map } = this;
+    for (let key in map) {
+      let other = map[key];
+      if (other.active && other.supply) {
+        return other;
+      }
+    }
+    return null;
+  }
+
+  emitSupply(source, target) {
+    source.supply--;
+    this.packets.push({
+      x: source.x,
+      y: source.y,
+      frame: FRAME_SUPPLY,
+      z: Z.SUPPLY,
+      w: 5, h: 5,
+      source,
+      target,
+      speed: PACKET_SPEED,
+      pos: [source.x, source.y],
+    });
+  }
+
+  updateBuilding(ent) {
+    let { building } = ent;
+    if (building.supply_enroute) {
+      return;
+    }
+    // find supply to send
+    let source = this.findSupplySource(ent);
+    if (!source) {
+      return;
+    }
+    this.emitSupply(source, ent);
+    building.supply_enroute = true;
+  }
+
+  updatePacket(packet, dt) {
+    let { speed, target, source, pos } = packet;
+    let dist = dt * speed;
+    let dist_needed = v2dist(pos, target.pos);
+    if (!packet.delta) {
+      packet.delta = v2iNormalize(v2sub(vec2(), target.pos, source.pos));
+    }
+    if (dist < dist_needed) {
+      v2addScale(pos, pos, packet.delta, dist);
+      packet.x = pos[0];
+      packet.y = pos[1];
+      return false;
+    }
+
+    // arrived!
+    let { building } = target;
+    if (building) {
+      building.supply_enroute = false;
+      building.progress++;
+      if (building.progress === building.required) {
+        target.building = null;
+        target.active = true;
+        target.frame = ent_types[target.type].frame;
+        if (target.type === TYPE_MINER) {
+          this.activateMiner(target);
+        }
+      }
+    } else {
+      target.supply = min(target.supply + 1, target.supply_max);
+    }
+    return true;
+  }
+
+  every10Seconds() {
+    let { map } = this;
+    for (let key in map) {
+      let ent = map[key];
+      let ent_type = ent_types[ent.type];
+      if (ent_type.supply_prod) {
+        ent.supply = min(ent_type.supply_max, ent.supply + ent_type.supply_prod);
+      }
+    }
+  }
+
   tick(dt) {
     let last_tick_counter = this.tick_counter;
     let last_tick_decasecond = floor(last_tick_counter / 10000);
     this.tick_counter += dt;
     let this_tick_decasecond = floor(this.tick_counter / 10000);
     if (last_tick_decasecond !== this_tick_decasecond) {
-      // once every 10 seconds
+      this.every10Seconds();
     }
 
-    let { map } = this;
+    let { map, packets } = this;
     for (let key in map) {
       let ent = map[key];
-      if (ent.type === TYPE_MINER) {
+      if (ent.building) {
+        this.updateBuilding(ent);
+      } else if (ent.type === TYPE_MINER) {
         this.updateMiner(ent, dt);
+      }
+    }
+
+    for (let ii = packets.length - 1; ii >= 0; --ii) {
+      let packet = packets[ii];
+      if (this.updatePacket(packet, dt)) {
+        ridx(packets, ii);
       }
     }
   }
@@ -369,35 +505,39 @@ class Game {
     let selected = this.getSelected();
     let ent_type = ent_types[selected];
     let { map } = this;
-    let { r, frame, cost } = ent_type;
-    let seen = {};
-    // link to just first of any given type
-    let use_links = links.filter((a) => {
+    let { frame, frame_building, cost } = ent_type;
+    let elem = this.addEnt({
+      type: selected,
+      frame: frame_building, x, y, z: Z[frame],
+      rot: 0,
+      active: false,
+      building: {
+        progress: 0,
+        required: ent_type.cost_supply,
+        supply_enroute: false,
+      },
+      vis_seed: random(),
+    });
+    let asteroid_link;
+    // Find first of any given type
+    links.forEach((a) => {
       let { id } = a;
       let ent = map[id];
-      if (seen[ent.type]) {
-        return false;
+      if (ent.type === TYPE_ASTEROID) {
+        if (!asteroid_link) {
+          asteroid_link = id;
+        }
+      } else {
+        // must be supply link
+        this.supply_links.push([id, elem.id]);
       }
-      seen[ent.type] = id;
-      return true;
     });
-    let elem = {
-      type: selected,
-      frame, x, y, z: Z[frame],
-      w: SPRITE_W, h: SPRITE_W,
-      rot: 0,
-      r,
-      links: use_links,
-      seed: this.rand.random(),
-    };
     if (selected === TYPE_MINER) {
       elem.time_accum = 0;
-      elem.asteroid_link = seen[TYPE_ASTEROID];
-      assert(elem.asteroid_link);
-      this.updateMinerFrame(elem);
+      //elem.asteroid_link = asteroid_link;
+      //assert(elem.asteroid_link);
+      //this.updateMinerFrame(elem);
     }
-    elem.active = true;
-    map[++this.last_id] = elem;
     this.money -= cost;
     this.paused = false;
   }
@@ -408,7 +548,7 @@ class Game {
     let total = 0;
     for (let key in map) {
       let ent = map[key];
-      if (ent.supply_max) {
+      if (ent.supply_max && ent_types[ent.type].supply_source) {
         total += ent.supply_max;
         if (ent.active) {
           avail += ent.supply;
@@ -490,30 +630,32 @@ function drawMap() {
   viewx1 -= 2;
   viewy1 -= CARD_H + 2;
 
-  let { map } = game;
+  let { map, supply_links, packets } = game;
   for (let key in map) {
     let elem = map[key];
     sprite_space.draw(elem);
-    let { links } = elem;
-    if (links) {
-      for (let ii = 0; ii < links.length; ++ii) {
-        let link = links[ii];
-        let other = map[link.id];
-        let color = link_color[other.type];
-        if (!color) {
-          // dead link
-          continue;
-        }
-        let w = 1;
-        let p = 1;
-        if (elem.active && other.type === TYPE_ASTEROID) {
-          w += abs(sin(engine.frame_timestamp * 0.008 + elem.seed * PI * 2));
-          p = 0.9;
-        }
-        ui.drawLine(elem.x, elem.y, other.x, other.y, Z.LINKS, w, p,
-          link_color[other.type][0]);
+    if (elem.asteroid_link) {
+      let other = map[elem.asteroid_link];
+      let w = 1;
+      let p = 1;
+      if (elem.active && other.type === TYPE_ASTEROID) {
+        w += abs(sin(engine.frame_timestamp * 0.008 + elem.vis_seed * PI * 2));
+        p = 0.9;
       }
+      ui.drawLine(elem.x, elem.y, other.x, other.y, Z.LINKS, w, p,
+        link_color[other.type][0]);
     }
+  }
+  for (let ii = 0; ii < supply_links.length; ++ii) {
+    let [a, b] = supply_links[ii];
+    let elem = map[a];
+    let other = map[b];
+    ui.drawLine(elem.x, elem.y, other.x, other.y, Z.LINKS, 1, 1,
+      link_color_supply[0]);
+  }
+  for (let ii = 0; ii < packets.length; ++ii) {
+    let packet = packets[ii];
+    sprite_space.draw(packet);
   }
 
   drawGhost(viewx0, viewy0, viewx1, viewy1);

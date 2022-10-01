@@ -9,10 +9,14 @@ import * as engine from 'glov/client/engine.js';
 import * as input from 'glov/client/input.js';
 import * as net from 'glov/client/net.js';
 import * as pico8 from 'glov/client/pico8.js';
+import { randFastCreate } from 'glov/client/rand_fast.js';
+import { spriteSetGet } from 'glov/client/sprite_sets.js';
 import { createSprite } from 'glov/client/sprites.js';
 import * as ui from 'glov/client/ui.js';
 import { mashString, randCreate } from 'glov/common/rand_alea.js';
 import {
+  defaults,
+  isInteger,
   lineCircleIntersect,
   lineLineIntersect,
   ridx,
@@ -93,6 +97,9 @@ const CARD_ICON_W = CARD_ICON_SCALE * SPRITE_W;
 const CARD_ICON_X = (CARD_W - CARD_ICON_W) / 2;
 const CARD_Y = game_height - CARD_H;
 
+const PAD_TOP = 24;
+const PAD_LEFTRIGHT = 2;
+const PAD_BOTTOM = CARD_H + 2;
 
 let sprites = {};
 let font;
@@ -104,6 +111,7 @@ function init() {
     name: 'border',
   });
   ui.loadUISprite('card_panel', [3, 2, 3], [3, 2, 3]);
+  ui.loadUISprite('reticule_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('card_button', [3, 2, 3], [CARD_H]);
   v4set(ui.color_panel, 1, 1, 1, 1);
 }
@@ -113,6 +121,7 @@ const RADIUS_LINK_ASTEROID = SPRITE_W * 2;
 const RADIUS_LINK_SUPPLY = SPRITE_W * 4;
 const RSQR_ASTERIOD = RADIUS_LINK_ASTEROID * RADIUS_LINK_ASTEROID;
 const RSQR_SUPPLY = RADIUS_LINK_SUPPLY * RADIUS_LINK_SUPPLY;
+const MINE_RATE = 1000/8;
 
 const ent_types = {
   [TYPE_FACTORY]: {
@@ -120,6 +129,7 @@ const ent_types = {
     frame: FRAME_FACTORY,
     frame_building: FRAME_FACTORY_BUILDING,
     label: 'Factory',
+    desc: [`Generates ${FACTORY_SUPPLY} Supply every 10 seconds`],
     cost: 800,
     cost_supply: 7,
     r: RADIUS_DEFAULT,
@@ -133,11 +143,12 @@ const ent_types = {
     frame: FRAME_MINER,
     frame_building: FRAME_MINER_BUILDING,
     label: 'Miner',
+    desc: [`Harvests ${round(1000/MINE_RATE)}g per second`, 'Requires 1 Supply every 10 seconds'],
     cost: 100,
     cost_supply: 3,
     supply_max: 1,
     r: RADIUS_DEFAULT,
-    mine_rate: 1000/8, // millisecond per ore
+    mine_rate: MINE_RATE, // millisecond per ore
     supply_rate: 1/10000, // supply per millisecond
     max_links: 1,
   },
@@ -150,7 +161,7 @@ const ent_types = {
     cost_supply: 1,
     supply_max: 0,
     r: 3,
-    max_links: 4,
+    max_links: 5,
   },
   [TYPE_ASTEROID]: {
     frame: FRAME_ASTEROID,
@@ -189,6 +200,15 @@ function cmpID(a, b) {
   return a.id < b.id ? -1 : 1;
 }
 
+let rand_fast = randFastCreate();
+function asteroidName(ent) {
+  let { vis_seed } = ent;
+  rand_fast.reseed(floor(vis_seed * 1000000));
+  return `Asteroid ${2032 + rand_fast.range(100)} ` +
+    `${String.fromCharCode('A'.charCodeAt(0) + rand_fast.range(26))}` +
+    `${String.fromCharCode('A'.charCodeAt(0) + rand_fast.range(15))}`;
+}
+
 let delta = vec2();
 let temp_pos = vec2();
 
@@ -217,8 +237,8 @@ class Game {
   }
 
   constructor(seed) {
-    let w = this.w = 720;
-    let h = this.h = 400;
+    let w = this.w = game_width - PAD_LEFTRIGHT * 2;
+    let h = this.h = game_height - PAD_TOP - PAD_BOTTOM;
     let rand = this.rand = randCreate(mashString(seed));
     let num_asteroids = 100;
     this.map = {};
@@ -256,9 +276,10 @@ class Game {
     this.value_mined = 0;
     this.total_value = total_value;
     this.money = 500;
-    this.selected = engine.DEBUG ? TYPE_MINER : null;
+    this.selected = null; // engine.DEBUG ? TYPE_MINER : null;
     this.tick_counter = 0;
     this.paused = true;
+    this.selected_ent = engine.DEBUG ? this.map[1] : null;
   }
 
   tickWrap() {
@@ -274,6 +295,66 @@ class Game {
       dt -= 16;
     }
     this.tick(dt);
+  }
+
+  scrapValue(ent) {
+    let ent_type = ent_types[ent.type];
+    let value = round(ent_type.cost * 0.5);
+    if (ent.type === TYPE_MINER && ent.exhausted) {
+      let { map } = this;
+      let ret = 0;
+      for (let key in map) {
+        ent = map[key];
+        if (ent.type === TYPE_MINER && ent.exhausted) {
+          ret += value;
+        }
+      }
+      value = ret;
+    }
+    return value;
+  }
+  canScrap(ent) {
+    let { map } = this;
+    let ent_type = ent_types[ent.type];
+    if (ent_type.supply_prod) {
+      for (let key in map) {
+        let other = map[key];
+        if (other !== ent && ent_types[other.type].supply_prod) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return true;
+  }
+  scrap(ent, is_scrap_all) {
+    let { supply_links, map, packets } = this;
+    if (is_scrap_all) {
+      for (let key in map) {
+        ent = map[key];
+        if (ent.type === TYPE_MINER && ent.exhausted) {
+          this.scrap(ent);
+        }
+      }
+      return;
+    }
+    this.money += this.scrapValue(ent);
+    this.paths_dirty = true;
+    delete map[ent.id];
+    for (let ii = supply_links.length - 1; ii >= 0; --ii) {
+      let link = supply_links[ii];
+      if (link[0] === ent.id || link[1] === ent.id) {
+        ridx(supply_links, ii);
+      }
+    }
+    for (let ii = packets.length - 1; ii >= 0; --ii) {
+      let packet = packets[ii];
+      if (packet.target === ent || packet.next === ent) {
+        packet.target.supply_enroute = false;
+        ridx(packets, ii);
+      }
+    }
+    this.selected_ent = null;
   }
 
   activateMiner(ent) {
@@ -920,14 +1001,12 @@ function drawMap(dt) {
   gl.clearColor(0,0,0,1);
   let viewx0 = 0;
   let viewy0 = 0;
-  let viewx1 = game_width;
-  let viewy1 = game_height;
-  camera2d.set(0, 0, game_width, game_height);
   // TODO: if zooming, offsets need to be in screen space, not view space!
-  viewx0 += 2;
-  viewy0 += 2;
-  viewx1 -= 2;
-  viewy1 -= CARD_H + 2;
+  let xoffs = PAD_LEFTRIGHT;
+  let yoffs = PAD_TOP;
+  let viewx1 = game_width - PAD_LEFTRIGHT*2;
+  let viewy1 = game_height - PAD_TOP - PAD_BOTTOM;
+  camera2d.set(-xoffs, -yoffs, game_width - xoffs, game_height - yoffs);
 
   let { map, supply_links, packets } = game;
   for (let key in map) {
@@ -940,6 +1019,31 @@ function drawMap(dt) {
     //     text: `${elem.supply}`,
     //   });
     // }
+    let elem_pos = {
+      x: floor(elem.x - elem.r),
+      y: floor(elem.y - elem.r),
+      w: ceil(elem.r * 2 + 1),
+      h: ceil(elem.r * 2 + 1),
+    };
+    let click = input.click(elem_pos);
+    if (click) {
+      ui.playUISound('button_click');
+      if (click.button === 1 && elem.type !== TYPE_ASTEROID) {
+        game.selected = elem.type;
+        game.selected_ent = null;
+      } else {
+        game.selected_ent = elem;
+        game.selected = null;
+      }
+    }
+    if (game.selected_ent === elem) {
+      ui.drawBox({
+        x: elem_pos.x - 2,
+        y: elem_pos.y - 2,
+        w: elem_pos.w + 4,
+        h: elem_pos.h + 4,
+      }, ui.sprites.reticule_panel, 1);
+    }
     let { asteroid_link, building_est } = elem;
     if (building_est) {
       let { progress, required } = building_est;
@@ -986,9 +1090,6 @@ function drawMap(dt) {
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
 const CARD_SUPPLY_Y = CARD_Y + CARD_H - 5;
 
-const HUD_PROGRESS_W = game_width / 4;
-const HUD_PROGRESS_X = (game_width - HUD_PROGRESS_W) / 2;
-
 function perc(v) {
   let rv = round(v * 100);
   if (rv === 100 && v !== 1) {
@@ -1005,6 +1106,13 @@ function timefmt(ms) {
   let m = floor(s / 60);
   s -= m * 60;
   return `${m}:${pad2(s)}`;
+}
+
+function fmtSupply(v) {
+  if (isInteger(v)) {
+    return v;
+  }
+  return v.toFixed(2);
 }
 
 function drawHUD() {
@@ -1088,10 +1196,12 @@ function drawHUD() {
         hotkey: KEYS[key],
       })) {
         game.selected = game.selected === type_id ? null : type_id;
+        game.selected_ent = null;
       }
       if (input.keyDownEdge(KEYS[`NUMPAD${ii+1}`])) {
         ui.playUISound('button_click');
         game.selected = game.selected === type_id ? null : type_id;
+        game.selected_ent = null;
       }
     }
     // ui.panel({
@@ -1101,52 +1211,201 @@ function drawHUD() {
     // });
     x += CARD_W + 2;
   }
-  x += 2;
+
+  let { selected_ent } = game;
+  if (selected_ent || game.selected) {
+    if (game.selected) {
+      selected_ent = {
+        type: game.selected,
+      };
+    }
+    let y = CARD_Y;
+    let line_height = ui.font_height + 1;
+    let { type } = selected_ent;
+    let ent_type = ent_types[type];
+    x += 2;
+    let panel_param = {
+      x, y,
+      w: game_width - x - 4,
+      h: CARD_H,
+    };
+    x += 4;
+    y += 4;
+
+    if (type === TYPE_ASTEROID) {
+      font.draw({
+        color: pico8.font_colors[0],
+        x, y,
+        text: asteroidName(selected_ent),
+      });
+      y += line_height;
+      font.draw({
+        color: pico8.font_colors[0],
+        x, y,
+        text: selected_ent.value ? `Remaining value: ${selected_ent.value}g` : 'DEPLETED',
+      });
+      y += line_height;
+      if (selected_ent.value) {
+        font.draw({
+          color: pico8.font_colors[3],
+          x, y,
+          text: 'Hint: Build Miners nearby to mine',
+        });
+        y += line_height;
+      }
+    } else {
+      font.draw({
+        color: pico8.font_colors[0],
+        x, y,
+        text: ent_type.label,
+      });
+      y += line_height;
+
+      if (ent_type.desc) {
+        for (let ii = 0; ii < ent_type.desc.length; ++ii) {
+          let line = ent_type.desc[ii];
+          font.draw({
+            color: pico8.font_colors[0],
+            x, y,
+            text: line,
+          });
+          y += line_height;
+        }
+      }
+
+      if (ent_type.max_links > 1) {
+        let text = isFinite(ent_type.max_links) ?
+          `Supports ${ent_type.max_links} supply links` :
+          'Supports unlimited supply links';
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text,
+        });
+        y += line_height;
+      }
+
+      if (game.selected) {
+        // details on build option
+        y += 4;
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text: `Cost to build: ${ent_type.cost}g and ${ent_type.cost_supply} Supply`,
+        });
+        y += line_height;
+
+      } else {
+        // details on real ent
+        y += 4;
+
+        if (selected_ent.building) {
+          font.draw({
+            color: pico8.font_colors[4],
+            x, y,
+            text: `Build progress: ${selected_ent.building.progress} / ${selected_ent.building.required}`,
+          });
+          y += line_height;
+        } else if (selected_ent.supply_max) {
+          font.draw({
+            color: pico8.font_colors[4],
+            x, y,
+            text: `Supply: ${fmtSupply(selected_ent.supply)} / ${selected_ent.supply_max}`,
+          });
+          y += line_height;
+        }
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text: `Scrap value: ${game.scrapValue(selected_ent)}g`,
+        });
+        y += line_height;
+
+        let button_w = 72;
+        y = CARD_Y + 4;
+        x = game_width - 9 - button_w;
+        let disabled = !game.canScrap(selected_ent);
+        let is_scrap_all = selected_ent.type === TYPE_MINER && selected_ent.exhausted;
+        if (ui.button({
+          x, y, w: button_w,
+          text: is_scrap_all ? 'Scrap All (Del)' : 'Scrap (Del)',
+          disabled,
+          hotkey: KEYS.DEL,
+        })) {
+          // TODO
+          game.scrap(selected_ent, is_scrap_all);
+        } else if (!disabled && (input.keyDownEdge(KEYS.NUMPAD_DECIMAL_POINT) || input.keyDownEdge(KEYS.BACKSPACE))) {
+          ui.playUISound('button_click');
+          game.scrap(selected_ent, is_scrap_all);
+        }
+      }
+    }
+    ui.panel(panel_param);
+  }
+
+  let y = 0;
+  let status_size = ui.font_height * 2;
+  let status_text_y = y + 4;
+  let status_h = status_size + 8;
+  let status_w = floor((game_width - 4 * 2 - 2 * 3) / 4);
+  x = 4;
   ui.panel({
-    x, y: CARD_Y,
-    w: game_width - x - 4,
-    h: CARD_H,
+    x, y,
+    w: status_w,
+    h: status_h,
   });
   font.draw({
     color: pico8.font_colors[3],
     x: x + 6,
-    y: CARD_Y + 6,
+    y: status_text_y,
     z: Z.UI + 1,
-    size: ui.font_height * 2,
+    size: status_size,
     text: `Money: ${game.money}g`,
+  });
+
+  x += status_w + 2;
+  ui.panel({
+    x, y,
+    w: status_w,
+    h: status_h,
   });
 
   let [supply_cur, supply_max] = game.availableSupply();
   font.draw({
     color: pico8.font_colors[4],
     x: x + 6,
-    y: CARD_Y + 6 + ui.font_height * 2,
+    y: status_text_y,
     z: Z.UI + 1,
-    size: ui.font_height * 2,
+    size: status_size,
     text: `Supply: ${supply_cur} / ${supply_max}`,
   });
 
-  let y = 2;
-  font.draw({
-    x: HUD_PROGRESS_X, w: HUD_PROGRESS_W,
-    y,
-    align: font.ALIGN.HCENTER,
-    text: `${game.value_mined} / ${game.total_value} (${perc(game.value_mined / game.total_value)})`,
-  });
-  y += ui.font_height;
-  font.draw({
-    x: HUD_PROGRESS_X, w: HUD_PROGRESS_W,
-    y,
-    align: font.ALIGN.HCENTER,
-    text: timefmt(game.tick_counter),
+  x += status_w + 2;
+  ui.panel({
+    x, y,
+    w: status_w * 1.5,
+    h: status_h,
   });
 
+  font.draw({
+    color: pico8.font_colors[0],
+    x: x + 6,
+    y: status_text_y,
+    z: Z.UI + 1,
+    size: status_size,
+    text: `${game.value_mined} / ${game.total_value} (${perc(game.value_mined / game.total_value)})` +
+      `  ${timefmt(game.tick_counter)}`,
+  });
 }
 
 function statePlay(dt) {
   game.tickWrap();
-  if (game.selected && (input.click({ button: 2 }) || input.keyUpEdge(KEYS.ESC))) {
-    game.selected = null;
+  if ((game.selected || game.selected_ent) && (input.click({ button: 2 }) || input.keyUpEdge(KEYS.ESC))) {
+    if (game.selected) {
+      game.selected = null;
+    } else {
+      game.selected_ent = null;
+    }
   }
   drawHUD();
   drawMap(dt);
@@ -1162,10 +1421,13 @@ export function main() {
   const font_info_04b03x1 = require('./img/font/04b03_8x1.json');
   const font_info_palanquin32 = require('./img/font/palanquin32.json');
   let pixely = 'strict';
+  let ui_sprites;
   if (pixely === 'strict') {
     font = { info: font_info_04b03x1, texture: 'font/04b03_8x1' };
+    ui_sprites = spriteSetGet('pixely');
   } else if (pixely && pixely !== 'off') {
     font = { info: font_info_04b03x2, texture: 'font/04b03_8x2' };
+    ui_sprites = spriteSetGet('pixely');
   } else {
     font = { info: font_info_palanquin32, texture: 'font/palanquin32' };
   }
@@ -1177,9 +1439,9 @@ export function main() {
     font,
     viewport_postprocess: false,
     antialias: false,
-    ui_sprites: {
+    ui_sprites: defaults({
       panel: { name: 'pixely/panel', ws: [3, 6, 3], hs: [3, 6, 3] },
-    },
+    }, ui_sprites),
   })) {
     return;
   }

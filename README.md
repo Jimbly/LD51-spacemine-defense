@@ -1,7 +1,7 @@
 LD51 - Every 10 Seconds
 ============================
 
-Ludum Dare 51 Entry by Jimbly - "Name TBD"
+Ludum Dare 51 Entry by Jimbly - "Spacemine Defense"
 
 * Play here: [dashingstrike.com/LudumDare/LD51/](http://www.dashingstrike.com/LudumDare/LD51/)
 * Using [Javascript libGlov/GLOV.js framework](https://github.com/Jimbly/glovjs)
@@ -15,11 +15,18 @@ X 2 enemy types
   * 3 levels
   * high score lists
   * game over / you win screens
+* level defs
+  * need actual no danger
+  * pacing of waves
+* Fast forward / menu buttons
 * music - 2 tracks, 10/20/30s each, one for battle, one for peacetime
 * SFX
 * New asteroid if no other gfx
+  * 2 size variations
 * Button GFX
+* waves ramp up in difficulty
 * stretch:
+  * scrolling background texture
   * particles
   * art pass
   * more units: (need to rebalance level choices)

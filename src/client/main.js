@@ -1,18 +1,22 @@
 /*eslint global-require:off*/
 // eslint-disable-next-line import/order
 const local_storage = require('glov/client/local_storage.js');
-local_storage.setStoragePrefix('glovjs-playground'); // Before requiring anything else that might load from this
+local_storage.setStoragePrefix('LD51'); // Before requiring anything else that might load from this
 
 import assert from 'assert';
+import { createAnimationSequencer } from 'glov/client/animation.js';
 import * as camera2d from 'glov/client/camera2d.js';
 import * as engine from 'glov/client/engine.js';
-import { fontStyle } from 'glov/client/font.js';
+import { ALIGN, fontStyle, styleColored } from 'glov/client/font.js';
 import * as input from 'glov/client/input.js';
 import * as net from 'glov/client/net.js';
 import * as pico8 from 'glov/client/pico8.js';
 import { randFastCreate } from 'glov/client/rand_fast.js';
+import * as score_system from 'glov/client/score.js';
+import { scoresDraw } from 'glov/client/score_ui.js';
 import { spriteSetGet } from 'glov/client/sprite_sets.js';
 import { createSprite } from 'glov/client/sprites.js';
+import * as transition from 'glov/client/transition.js';
 import * as ui from 'glov/client/ui.js';
 import { mashString, randCreate } from 'glov/common/rand_alea.js';
 import {
@@ -131,6 +135,8 @@ const PAD_BOTTOM = CARD_H + 2;
 
 let sprites = {};
 let font;
+let title_font;
+//let title_font2;
 function init() {
   sprites.test = createSprite({
     name: 'test',
@@ -141,6 +147,8 @@ function init() {
   ui.loadUISprite('card_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('reticule_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('card_button', [3, 2, 3], [CARD_H]);
+  ui.loadUISprite('buttongreen', [4, 5, 4], [13]);
+  ui.loadUISprite('buttongreen_down', [4, 5, 4], [13]);
   v4set(ui.color_panel, 1, 1, 1, 1);
 }
 
@@ -273,7 +281,7 @@ const enemy_types = [
   },
   {
     wave_size: 4,
-    name: 'Mauraders',
+    name: 'Marauders',
     w: SPRITE_W,
     h: SPRITE_W,
     z: Z.ENEMIES,
@@ -291,6 +299,31 @@ const enemy_types = [
     laser_time: BIG_LASER_TIME,
   },
 ];
+
+const level_defs = {
+  intro: {
+    num_asteroids: 20,
+    display_name: '1/2 Intro', seed: 'test2',
+    subtitle: 'No danger, learn the basics',
+  },
+  med: {
+    num_asteroids: 100,
+    display_name: '2/2 Defense', seed: '1234',
+    subtitle: 'TL;DR: Boss was wrong',
+  },
+  // hard: {
+  //   num_asteroids: 100,
+  //   display_name: 'Hard', seed: '3',
+  // },
+};
+let level_list = Object.keys(level_defs).map((key) => {
+  let def = level_defs[key];
+  def.name = key;
+  return def;
+});
+// for (let ii = 0; ii < level_list.length; ++ii) {
+//   level_list[ii].idx = ii;
+// }
 
 const link_color_supply = [pico8.colors[9], pico8.colors[4]];
 const link_color_asteroid = [pico8.colors[11], pico8.colors[3]];
@@ -374,11 +407,13 @@ class Game {
     return ent;
   }
 
-  constructor(seed) {
+  constructor(level_idx) {
+    this.level_idx = level_idx;
+    let ld = level_list[level_idx];
     let w = this.w = game_width - PAD_LEFTRIGHT * 2;
     let h = this.h = game_height - PAD_TOP - PAD_BOTTOM;
-    let rand = this.rand = randCreate(mashString(seed));
-    let num_asteroids = 100;
+    let rand = this.rand = randCreate(mashString(ld.seed));
+    let { num_asteroids } = ld;
     this.game_over = false;
     this.map = {};
     this.supply_links = [];
@@ -424,10 +459,10 @@ class Game {
     this.paused = true;
     this.selected_ent = null;
     if (engine.DEBUG) {
-      this.paused = false;
+      // this.paused = false;
       // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
-      this.money = 20000;
+      // this.money = 20000;
     }
   }
 
@@ -436,7 +471,7 @@ class Game {
       return;
     }
     let dt = engine.getFrameDt();
-    if (engine.DEBUG && input.keyDown(KEYS.SHIFT)) {
+    if (input.keyDown(KEYS.SHIFT)) {
       dt *= 10;
     }
     while (dt > 16) {
@@ -586,6 +621,11 @@ class Game {
 
   endGame() {
     this.paused = true;
+    this.won = true;
+    score_system.setScore(this.level_idx, {
+      seconds: floor(this.tick_counter / 1000),
+      progress: this.value_mined / this.total_value,
+    });
     let { map } = this;
     for (let key in map) {
       let ent = map[key];
@@ -881,6 +921,16 @@ class Game {
 
     if (this.decaseconds > 6 && this.decaseconds % 3 === 0) {
       this.spawn_wave = true;
+    }
+
+    if (!this.submitting_score) {
+      this.submitting_score = true;
+      score_system.setScore(this.level_idx, {
+        seconds: floor(this.tick_counter / 1000),
+        progress: this.value_mined / this.total_value,
+      }, () => {
+        this.submitting_score = false;
+      });
     }
   }
 
@@ -1415,8 +1465,10 @@ class Game {
 
 let game;
 
-function playInit() {
-  game = new Game('1234');
+function playInit(level_idx, resume_game) {
+  if (!resume_game) {
+    game = new Game(level_idx);
+  }
 }
 
 let mouse_pos = vec2();
@@ -1630,13 +1682,13 @@ function drawMap(dt) {
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
 const CARD_SUPPLY_Y = CARD_Y + CARD_H - 5;
 
-// function perc(v) {
-//   let rv = round(v * 100);
-//   if (rv === 100 && v !== 1) {
-//     rv = 99;
-//   }
-//   return `${rv}%`;
-// }
+function perc(v) {
+  let rv = round(v * 100);
+  if (rv === 100 && v !== 1) {
+    rv = 99;
+  }
+  return `${rv}%`;
+}
 
 function pad2(v) {
   return `0${v}`.slice(-2);
@@ -1684,7 +1736,7 @@ function drawHUD() {
           w: CARD_W,
           h: CARD_ICON_W,
           text: selected === null ? 'CANNOT\nAFFORD' : 'SELECTED',
-          align: font.ALIGN.HVCENTER | font.ALIGN.HWRAP,
+          align: ALIGN.HVCENTER | ALIGN.HWRAP,
         });
       }
 
@@ -1695,7 +1747,7 @@ function drawHUD() {
         z: Z.UI + 3,
         w: CARD_W,
         text: ent_type.label,
-        align: font.ALIGN.HCENTER,
+        align: ALIGN.HCENTER,
       });
 
       // cost
@@ -1705,7 +1757,7 @@ function drawHUD() {
         z: Z.UI + 3,
         w: CARD_W,
         text: `${ent_type.cost}g`,
-        align: font.ALIGN.HCENTER,
+        align: ALIGN.HCENTER,
       });
       // cost in supply
       let { cost_supply } = ent_type;
@@ -1726,7 +1778,7 @@ function drawHUD() {
         x: x + 2 + (ii === 0 ? 1 : 0), y: CARD_Y + 2, w: CARD_W - 4, h: CARD_H - 4,
         text: key,
         color: pico8.font_colors[5],
-        align: font.ALIGN.HRIGHT,
+        align: ALIGN.HRIGHT,
       });
 
       if (ui.button({
@@ -1810,7 +1862,7 @@ function drawHUD() {
         color: pico8.font_colors[0],
         x, y,
         w: panel_param.x + panel_param.w - 4 - x,
-        align: font.ALIGN.HCENTER,
+        align: ALIGN.HCENTER,
         text: game.selected ? `${ent_type.hp} HP` : `${selected_ent.hp} / ${selected_ent.hp_max} HP`,
       });
       y += line_height;
@@ -2015,8 +2067,21 @@ function drawHUD() {
     text: `${game.value_mined} / ${game.total_value}` +
       `  ${timefmt(game.tick_counter)}`,
   });
+
+  x += progress_w + 2;
+
+  if (ui.button({
+    x: game_width - ui.button_width - 4, y: 0,
+    h: status_h,
+    font_height: status_size,
+    text: 'Menu',
+  })) {
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    engine.setState(stateLevelSelect);
+  }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function statePlay(dt) {
   game.tickWrap();
   if ((game.selected || game.selected_ent) && (input.click({ button: 2 }) || input.keyUpEdge(KEYS.ESC))) {
@@ -2033,32 +2098,263 @@ function statePlay(dt) {
   }
 }
 
+let style_title = fontStyle(null, {
+  color: pico8.font_colors[7],
+  outline_color: pico8.font_colors[3],
+  outline_width: 1.1,
+  glow_color: pico8.font_colors[1],
+  glow_inner: -2,
+  glow_outer: 8,
+  glow_xoffs: 2.5,
+  glow_yoffs: 2.5,
+});
+
+const SCORE_COLUMNS = [
+  // widths are just proportional, scaled relative to `width` passed in
+  { name: '', width: 12, align: ALIGN.HFIT | ALIGN.HRIGHT | ALIGN.VCENTER },
+  { name: 'Name', width: 60, align: ALIGN.HFIT | ALIGN.VCENTER },
+  { name: 'Progress', width: 24 },
+  { name: 'Time', width: 24 },
+];
+const style_score = styleColored(null, pico8.font_colors[7]);
+const style_me = styleColored(null, pico8.font_colors[11]);
+const style_header = styleColored(null, pico8.font_colors[6]);
+function myScoreToRow(row, score) {
+  let seconds = score.seconds;
+  let s = (seconds % 60);
+  seconds -= s;
+  let m = seconds / 60;
+  row.push(perc(score.progress), `${m}:${pad2(s)}`);
+}
+
+let level_idx = 0;
+function stateLevelSelect(dt) {
+  gl.clearColor(0,0,0,1);
+  v3copy(engine.border_clear_color, pico8.colors[0]);
+  let W = game_width/2;
+  let H = game_height/2;
+  camera2d.set(0, 0, W, H);
+
+  let ld = level_list[level_idx];
+
+  let y = 8;
+  let pad = 16;
+  let button_w = 24;
+  let button_h = 16;
+  if (ui.buttonText({
+    x: pad, y,
+    w: button_w, h: button_h,
+    disabled: level_idx === 0,
+    text: '<<',
+  })) {
+    --level_idx;
+    transition.queue(Z.TRANSITION_FINAL, transition.splitScreen(500, 4, true));
+  }
+
+  title_font.draw({
+    x: 0, w: W, y, align: ALIGN.HCENTER,
+    size: 24,
+    style: style_title,
+    text: ld.display_name,
+  });
+
+  if (ui.buttonText({
+    x: W - pad - button_w, y,
+    w: button_w, h: button_h,
+    disabled: level_idx >= level_list.length - 1,
+    text: '>>',
+  })) {
+    ++level_idx;
+    transition.queue(Z.TRANSITION_FINAL, transition.splitScreen(500, 4, true));
+  }
+
+  y += 24;
+  font.draw({
+    color: pico8.font_colors[5],
+    x: 0, w: W, y, align: ALIGN.HCENTER,
+    text: ld.subtitle,
+  });
+
+  y += 18;
+
+  let has_score = score_system.getScore(level_idx);
+
+  button_w = 64;
+
+  let can_resume = game && game.level_idx === level_idx && !game.game_over && !game.won;
+  let replay_text = can_resume ? 'Resume Level' :
+    has_score ? 'Replay Level' : 'Start Level';
+
+  if (has_score && level_idx < level_list.length - 1) {
+    let x = (W - button_w * 2 - pad) / 2;
+    if (ui.buttonText({
+      x, y,
+      w: button_w, h: button_h,
+      text: replay_text,
+    })) {
+      playInit(level_idx, can_resume);
+      engine.setState(statePlay);
+    }
+    x += button_w + pad;
+    if (ui.buttonText({
+      base_name: 'buttongreen',
+      x, y,
+      w: button_w, h: button_h,
+      text: 'Next Level',
+    })) {
+      ++level_idx;
+      transition.queue(Z.TRANSITION_FINAL, transition.splitScreen(500, 4, true));
+    }
+  } else {
+    if (ui.buttonText({
+      x: (W - button_w)/2, y,
+      w: button_w, h: button_h,
+      text: replay_text,
+    })) {
+      playInit(level_idx, can_resume);
+      engine.setState(statePlay);
+    }
+  }
+  y += button_h + 8;
+
+  pad = 24;
+  scoresDraw({
+    x: pad, width: W - pad * 2,
+    y, height: H - y - pad,
+    z: Z.UI,
+    size: ui.font_height,
+    line_height: ui.font_height+2,
+    level_id: ld.name,
+    columns: SCORE_COLUMNS,
+    scoreToRow: myScoreToRow,
+    style_score,
+    style_me,
+    style_header,
+    color_line: pico8.colors[3],
+    color_me_background: pico8.colors[1],
+  });
+}
+
+let title_anim;
+let title_alpha = {
+  title: 0,
+  desc: 0,
+  sub: 0,
+  button: 0,
+};
+function stateTitleInit() {
+  title_anim = createAnimationSequencer();
+  let t = title_anim.add(0, 300, (progress) => {
+    title_alpha.title = progress;
+  });
+  t = title_anim.add(t + 200, 1000, (progress) => {
+    title_alpha.desc = progress;
+  });
+  t = title_anim.add(t + 300, 300, (progress) => {
+    title_alpha.sub = progress;
+  });
+  title_anim.add(t + 1000, 300, (progress) => {
+    title_alpha.button = progress;
+  });
+}
+function stateTitle(dt) {
+  gl.clearColor(0,0,0,1);
+  v3copy(engine.border_clear_color, pico8.colors[0]);
+  let W = game_width/2;
+  let H = game_height/2;
+  camera2d.set(0, 0, W, H);
+  if (title_anim) {
+    if (!title_anim.update(dt)) {
+      title_anim = null;
+    } else {
+      input.eatAllInput();
+    }
+  }
+
+  let y = 40;
+
+  title_font.draw({
+    style: style_title,
+    alpha: title_alpha.title,
+    x: 0, y, w: W, align: ALIGN.HCENTER,
+    size: 30,
+    text: 'Spacemine Defense',
+  });
+
+  y += 40;
+  font.draw({
+    color: pico8.font_colors[5],
+    alpha: title_alpha.sub,
+    x: 0, y, w: W, align: ALIGN.HCENTER,
+    text: 'By Jimb Esser in 48 hours for Ludum Dare 51',
+  });
+  y += ui.font_height + 2;
+  font.draw({
+    color: pico8.font_colors[5],
+    alpha: title_alpha.sub,
+    x: 0, y, w: W, align: ALIGN.HCENTER,
+    text: 'Heavily inspired by "The Space Game"',
+  });
+
+  y += 50;
+  font.draw({
+    color: pico8.font_colors[6],
+    alpha: title_alpha.desc,
+    x: W/6,
+    w: W - W/6*2,
+    y, align: ALIGN.HCENTER | ALIGN.HWRAP,
+    text: 'You are tasked with harvesting all resources from the sector as quickly' +
+      ' as possible.  Your boss tells you there is no danger and everything will go' +
+      ' just fine.',
+  });
+
+  if (title_alpha.button) {
+    let button_w = 80;
+    let button_h = 16;
+    let button = {
+      color: [1,1,1, title_alpha.button],
+      x: (W - button_w) / 2,
+      y: H - button_h - 24,
+      w: button_w,
+      h: button_h,
+      text: 'Play',
+    };
+    if (ui.button(button)) {
+      transition.queue(Z.TRANSITION_FINAL, transition.splitScreen(500, 4, true));
+      engine.setState(stateLevelSelect);
+    }
+  }
+}
+
 export function main() {
   if (engine.DEBUG) {
     // Enable auto-reload, etc
     net.init({ engine });
   }
 
-  const font_info_04b03x2 = require('./img/font/04b03_8x2.json');
+  // const font_info_04b03x2 = require('./img/font/04b03_8x2.json');
   const font_info_04b03x1 = require('./img/font/04b03_8x1.json');
-  const font_info_palanquin32 = require('./img/font/palanquin32.json');
+  // const font_info_palanquin32 = require('./img/font/palanquin32.json');
   let pixely = 'strict';
   let ui_sprites;
   if (pixely === 'strict') {
     font = { info: font_info_04b03x1, texture: 'font/04b03_8x1' };
     ui_sprites = spriteSetGet('pixely');
   } else if (pixely && pixely !== 'off') {
-    font = { info: font_info_04b03x2, texture: 'font/04b03_8x2' };
+    // font = { info: font_info_04b03x2, texture: 'font/04b03_8x2' };
     ui_sprites = spriteSetGet('pixely');
   } else {
-    font = { info: font_info_palanquin32, texture: 'font/palanquin32' };
+    // font = { info: font_info_palanquin32, texture: 'font/palanquin32' };
   }
+  const font_info_vga = require('./img/font/vga_16x2.json');
+  title_font = { info: font_info_vga, texture: 'font/vga_16x2' };
 
   if (!engine.startup({
     game_width,
     game_height,
     pixely,
     font,
+    title_font,
     viewport_postprocess: false,
     antialias: false,
     ui_sprites: defaults({
@@ -2067,13 +2363,42 @@ export function main() {
   })) {
     return;
   }
-  font = engine.font;
+  ({ font, title_font } = ui);
+
+  //title_font2 = fontCreate(require('./img/font/vga_16x1.json'), 'font/vga_16x1');
 
   ui.scaleSizes(13 / 32);
   ui.setFontHeight(8);
 
   init();
 
-  playInit();
-  engine.setState(statePlay);
+  const ENCODE = 100000;
+  function encodeScore(score) {
+    let progress = clamp(round(score.progress * 10000), 0, 10000);
+    if (progress === 10000 && score.progress !== 1) {
+      progress = 9999;
+    }
+    let time = ENCODE - 1 - min(score.seconds, ENCODE);
+    return progress * ENCODE + time;
+  }
+
+  function parseScore(value) {
+    let progress = floor(value / ENCODE);
+    value -= progress * ENCODE;
+    progress /= 10000;
+    let seconds = ENCODE - 1 - value;
+    return {
+      seconds,
+      progress,
+    };
+  }
+  score_system.init(encodeScore, parseScore, level_list, 'LD51');
+  score_system.updateHighScores();
+
+  stateTitleInit();
+  engine.setState(stateTitle);
+  if (engine.DEBUG) {
+    playInit(0, false);
+    engine.setState(statePlay);
+  }
 }

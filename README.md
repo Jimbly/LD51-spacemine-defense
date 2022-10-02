@@ -28,7 +28,7 @@ X button GFX
 * waves ramp up in difficulty
 * stretch:
   X scrolling background texture
-  * particles
+  X particles
   * art pass
   * more units: (need to rebalance level choices)
     * repair (packets?)

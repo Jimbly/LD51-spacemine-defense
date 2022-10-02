@@ -10,6 +10,7 @@ import * as engine from 'glov/client/engine.js';
 import { ALIGN, fontStyle, styleColored } from 'glov/client/font.js';
 import * as input from 'glov/client/input.js';
 import * as net from 'glov/client/net.js';
+import { preloadParticleData } from 'glov/client/particles.js';
 import * as pico8 from 'glov/client/pico8.js';
 import { randFastCreate } from 'glov/client/rand_fast.js';
 import * as score_system from 'glov/client/score.js';
@@ -76,6 +77,7 @@ import {
   FRAME_SUPPLY,
   sprite_space,
 } from './img/space.js';
+import * as particle_data from './particle_data.js';
 
 const { PI, abs, atan2, ceil, cos, max, min, random, round, sin, sqrt, floor } = Math;
 
@@ -100,6 +102,7 @@ Z.BACKGROUND = 1;
 Z.SPRITES = 10;
 Z[FRAME_ASTEROID_EMPTY] = 9;
 Z[FRAME_ASTEROID] = 10;
+Z.BUILD_PARTICLES = 12;
 Z.LINKS = 15;
 Z[FRAME_ROUTER] = 20;
 Z.SUPPLY = 25;
@@ -110,6 +113,8 @@ Z[FRAME_MINER] = 30;
 Z[FRAME_MINERUP] = 35;
 Z[FRAME_MINERUL] = 35;
 Z[FRAME_FACTORY] = 40;
+
+Z.PARTICLES = 42;
 
 Z.ENEMIES = 44;
 Z.FIGHTERS = 45;
@@ -222,6 +227,7 @@ const ent_types = {
     max_links: 5,
     hp: 20,
     die_sound: 'die_fighter',
+    explosion: 'explosion_small',
   },
   [TYPE_LASER]: {
     type: TYPE_LASER,
@@ -581,6 +587,11 @@ class Game {
     }
     return true;
   }
+  particle(ent, type, z) {
+    if (particle_data.defs[type]) {
+      engine.glov_particles.createSystem(particle_data.defs[type], [ent.x, ent.y, z || Z.PARTICLES]);
+    }
+  }
   scrap(ent, is_scrap_all, is_from_death) {
     let { supply_links, map, packets } = this;
     if (is_scrap_all) {
@@ -595,7 +606,9 @@ class Game {
     if (!is_from_death) {
       this.money += this.scrapValue(ent);
     }
-    ui.playUISound(ent_types[ent.type].die_sound, volume_sfx);
+    let ent_type = ent_types[ent.type];
+    ui.playUISound(ent_type.die_sound, volume_sfx);
+    this.particle(ent, ent_type.explosion || 'explosion');
     this.paths_dirty = true;
     delete map[ent.id];
     for (let ii = supply_links.length - 1; ii >= 0; --ii) {
@@ -877,6 +890,9 @@ class Game {
     if (ent_type.build_sound) {
       ui.playUISound(ent_type.build_sound);
     }
+    if (ent.type !== TYPE_ROUTER) {
+      this.particle(ent, 'build_finish', Z.BUILD_PARTICLES);
+    }
   }
 
   updatePacket(packet, dt) {
@@ -1072,7 +1088,6 @@ class Game {
 
   damage(ent, amount) {
     ui.playUISound('laser', volume_lasers);
-    // TODO: particles
     ent.hp -= amount;
     if (ent.hp <= 0) {
       this.scrap(ent, false, true);
@@ -1088,6 +1103,7 @@ class Game {
       assert(idx !== -1);
       ridx(this.enemies, idx);
       ui.playUISound('die_enemy', volume_sfx);
+      this.particle(enemy, 'explosion_enemy');
     }
   }
 
@@ -1101,6 +1117,7 @@ class Game {
       ridx(this.fighters, idx);
       fighter.bay.num_fighters--;
       ui.playUISound('die_fighter', volume_sfx);
+      this.particle(fighter, 'explosion_small');
     }
   }
 
@@ -1527,6 +1544,7 @@ class Game {
     this.pullSupply(ent);
 
     this.paused = false;
+    this.particle(ent, 'build', Z.BUILD_PARTICLES);
   }
 
   availableSupply() {
@@ -2570,6 +2588,8 @@ export function main() {
     return;
   }
   ({ font, title_font } = ui);
+
+  preloadParticleData(particle_data.defs);
 
   //title_font2 = fontCreate(require('./img/font/vga_16x1.json'), 'font/vga_16x1');
 

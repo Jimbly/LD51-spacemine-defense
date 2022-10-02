@@ -19,13 +19,15 @@ X level defs
   X need actual no danger
   X pacing of waves
 X Fast forward / menu buttons
-* music - 2 tracks, 10/20/30s each, one for battle, one for peacetime
+X music bgm
+X music menu
 * SFX
 * New asteroid if no other gfx
   * 2 size variations
-* Button GFX
+* button GFX
 * waves ramp up in difficulty
 * stretch:
+  * only do N search for targets each frame
   * scrolling background texture
   * particles
   * art pass

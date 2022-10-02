@@ -14,6 +14,8 @@ import * as pico8 from 'glov/client/pico8.js';
 import { randFastCreate } from 'glov/client/rand_fast.js';
 import * as score_system from 'glov/client/score.js';
 import { scoresDraw } from 'glov/client/score_ui.js';
+import * as settings from 'glov/client/settings.js';
+import { FADE, soundPlayMusic } from 'glov/client/sound.js';
 import { spriteSetGet } from 'glov/client/sprite_sets.js';
 import { createSprite } from 'glov/client/sprites.js';
 import * as transition from 'glov/client/transition.js';
@@ -63,8 +65,12 @@ import {
   FRAME_MINERUL,
   FRAME_MINERUP,
   FRAME_MINER_BUILDING,
+  FRAME_MUSIC_OFF,
+  FRAME_MUSIC_ON,
   FRAME_ROUTER,
   FRAME_ROUTER_BUILDING,
+  FRAME_SOUND_OFF,
+  FRAME_SOUND_ON,
   FRAME_SPEED_FF,
   FRAME_SPEED_PLAY,
   FRAME_SUPPLY,
@@ -368,6 +374,13 @@ function asteroidName(ent) {
     `${String.fromCharCode('A'.charCodeAt(0) + rand_fast.range(15))}`;
 }
 
+function levelSelectInit() {
+  soundPlayMusic('menu', 0.75, FADE);
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  engine.setState(stateLevelSelect);
+}
+
+
 let delta = vec2();
 let temp_pos = vec2();
 
@@ -447,11 +460,11 @@ class Game {
     let total_value = 0;
     for (let ii = 0; ii < num_asteroids; ++ii) {
       let x = rand.floatBetween(0, 1);
-      x = x * x + 0.05;
+      x = x * x * 0.9 + 0.05;
       x *= (rand.range(2) ? -1 : 1);
       x = x * w / 2 + w / 2;
       let y = rand.floatBetween(0, 1);
-      y = y * y + 0.05;
+      y = y * y * 0.9 + 0.05;
       y *= (rand.range(2) ? -1 : 1);
       y = y * h / 2 + h / 2;
       let ent = this.addEnt({
@@ -1486,6 +1499,7 @@ function playInit(level_idx, resume_game) {
   if (!resume_game) {
     game = new Game(level_idx);
   }
+  soundPlayMusic('bgm', 0.5, FADE);
 }
 
 let mouse_pos = vec2();
@@ -2114,8 +2128,7 @@ function drawHUD(dt) {
     font_height: status_size,
     text: 'Menu',
   })) {
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    engine.setState(stateLevelSelect);
+    levelSelectInit();
   }
 
   x -= status_h + 2;
@@ -2171,8 +2184,7 @@ function drawHUD(dt) {
       color: [1,1,1,win_alpha.alpha],
       text: game.game_over ? 'I\'ll do better next time' : 'I\'m good at this.',
     })) {
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      engine.setState(stateLevelSelect);
+      levelSelectInit();
     }
   } else {
     win_anim = null;
@@ -2315,6 +2327,28 @@ function stateLevelSelect(dt) {
   }
   y += button_h + 8;
 
+
+  pad = 8;
+  let x = pad;
+  let toggle_y = H - button_h - pad;
+  if (ui.buttonImage({
+    img: sprite_space,
+    shrink: 16/button_h,
+    frame: settings.volume_sound ? FRAME_SOUND_ON : FRAME_SOUND_OFF,
+    x, y: toggle_y, h: button_h, w: button_h,
+  })) {
+    settings.set('volume_sound', settings.volume_sound ? 0 : 1);
+  }
+  x += button_h + pad;
+  if (ui.buttonImage({
+    img: sprite_space,
+    shrink: 16/button_h,
+    frame: settings.volume_music ? FRAME_MUSIC_ON : FRAME_MUSIC_OFF,
+    x, y: toggle_y, h: button_h, w: button_h,
+  })) {
+    settings.set('volume_music', settings.volume_music ? 0 : 1);
+  }
+
   pad = 24;
   scoresDraw({
     x: pad, width: W - pad * 2,
@@ -2341,6 +2375,7 @@ let title_alpha = {
   button: 0,
 };
 function stateTitleInit() {
+  soundPlayMusic('menu', 0.75, FADE);
   title_anim = createAnimationSequencer();
   let t = title_anim.add(0, 300, (progress) => {
     title_alpha.title = progress;
@@ -2496,7 +2531,8 @@ export function main() {
   stateTitleInit();
   engine.setState(stateTitle);
   if (engine.DEBUG) {
-    playInit(0, false);
-    engine.setState(statePlay);
+    //playInit(0, false);
+    //engine.setState(statePlay);
+    levelSelectInit();
   }
 }

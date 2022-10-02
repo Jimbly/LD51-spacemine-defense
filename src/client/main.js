@@ -41,6 +41,7 @@ import {
   FRAME_ASTEROID,
   FRAME_ASTEROID_EMPTY,
   FRAME_ENEMY1,
+  FRAME_ENEMY2,
   FRAME_FACTORY,
   FRAME_FACTORY_BUILDING,
   FRAME_FACTORY_EMPTY,
@@ -103,6 +104,7 @@ Z.BUILDING_BAR = 50;
 Z.PLACE_PREVIEW = 60;
 
 const LASER_TIME = 100;
+const BIG_LASER_TIME = 1000;
 const PLAYER_LASER_TIME = 150;
 
 const { KEYS } = input;
@@ -217,7 +219,7 @@ const ent_types = {
     frame_building: FRAME_FIGHTERBAY_BUILDING,
     frame_nosupply: FRAME_FIGHTERBAY_EMPTY,
     w: 15, h: 15,
-    label: 'F\'terbay',
+    label: 'Flybay',
     cost: 1200,
     cost_supply: 6,
     supply_max: 10,
@@ -247,6 +249,47 @@ const buttons = [
   TYPE_ROUTER,
   TYPE_LASER,
   TYPE_FIGHTERBAY,
+];
+
+const enemy_types = [
+  {
+    wave_size: 20,
+    name: 'Fighters',
+    w: SPRITE_W,
+    h: SPRITE_W,
+    z: Z.ENEMIES,
+    speed: 10/1000, // pixels per ms
+    turning: 0.0008, // radians per ms
+    damage: 1,
+    angle_of_fire: PI/4,
+    hp: 5,
+    frame: FRAME_ENEMY1,
+    last_fire_time: 0,
+    last_fire_target: null,
+    range_sq: 26*26,
+    fire_time: 700,
+    fire_time_rand: 200,
+    laser_time: LASER_TIME,
+  },
+  {
+    wave_size: 4,
+    name: 'Mauraders',
+    w: SPRITE_W,
+    h: SPRITE_W,
+    z: Z.ENEMIES,
+    speed: 5/1000, // pixels per ms
+    turning: 0.0004, // radians per ms
+    damage: 20,
+    angle_of_fire: PI,
+    hp: 25,
+    frame: FRAME_ENEMY2,
+    last_fire_time: 0,
+    last_fire_target: null,
+    range_sq: 70*70,
+    fire_time: 2500,
+    fire_time_rand: 200,
+    laser_time: BIG_LASER_TIME,
+  },
 ];
 
 const link_color_supply = [pico8.colors[9], pico8.colors[4]];
@@ -380,7 +423,7 @@ class Game {
     this.decaseconds = 0;
     this.paused = true;
     this.selected_ent = null;
-    if (engine.DEBUG) {
+    if (engine.DEBUG && false) {
       this.paused = false;
       // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
@@ -796,7 +839,7 @@ class Game {
   }
 
   every10Seconds() {
-    let { map, round_robin_id, fighters } = this;
+    let { map, round_robin_id, fighters, enemies } = this;
     this.decaseconds++;
     // Generate supply, assemble list of who needs
     let needs_supply = [];
@@ -829,6 +872,9 @@ class Game {
     for (let ii = 0; ii < fighters.length; ++ii) {
       fighters[ii].patrol_target = null;
     }
+    for (let ii = 0; ii < enemies.length; ++ii) {
+      enemies[ii].target_id = null;
+    }
 
     if (this.decaseconds > 6 && this.decaseconds % 3 === 0) {
       this.spawn_wave = true;
@@ -842,31 +888,20 @@ class Game {
     this.spawn_wave = false;
     let { enemies, w, h } = this;
     let direction = this.rand.random() * PI * 2;
-    let count = 20;
+    let enemy_type = this.rand.range(enemy_types.length);
+    let et = enemy_types[enemy_type];
+    let count = et.wave_size;
     // TODO: announce!
     let dist = game_width * 0.75; // / 4;
     for (let ii = 0; ii < count; ++ii) {
       direction += (this.rand.random() - 0.5) * 0.5;
       let cosd = cos(direction);
       let sind = sin(direction);
-      let e = {
-        x: w/2 + sind * dist,
-        y: h/2 + cosd * dist,
-        w: SPRITE_W,
-        h: SPRITE_W,
-        z: Z.ENEMIES,
-        rot: this.rand.random() * 2 * PI, // -direction,
-        speed: 10/1000, // pixels per ms
-        turning: 0.0008, // radians per ms
-        damage: 1,
-        angle_of_fire: PI/4,
-        hp: 5,
-        frame: FRAME_ENEMY1,
-        last_fire_time: 0,
-        last_fire_target: null,
-        range_sq: 26*26,
-        fire_time: 700 + this.rand.range(200),
-      };
+      let e = Object.create(et);
+      e.x = w/2 + sind * dist;
+      e.y = h/2 + cosd * dist;
+      e.rot = this.rand.random() * 2 * PI; // -direction;
+      e.fire_time = et.fire_time + this.rand.range(et.fire_time_rand);
       enemies.push(e);
     }
   }
@@ -1018,6 +1053,7 @@ class Game {
               entlike.last_fire_time = this.tick_counter;
               entlike.last_fire_target = fighter;
               this.damageFighter(fighter, entlike.damage);
+              break;
             }
           }
         }
@@ -1563,14 +1599,13 @@ function drawMap(dt) {
     if (enemy.x < viewx0 || enemy.x > viewx1 ||
       enemy.y < viewy0 || enemy.y > viewy1
     ) {
-      sprite_space.draw({
-        ...enemy,
-        x: clamp(enemy.x, viewx0, viewx1),
-        y: clamp(enemy.y, viewy0, viewy1),
-      });
+      let etemp = Object.create(enemy);
+      etemp.x = clamp(enemy.x, viewx0, viewx1);
+      etemp.y = clamp(enemy.y, viewy0, viewy1);
+      sprite_space.draw(etemp);
     } else {
       sprite_space.draw(enemy);
-      if (enemy.last_fire_time > tick_counter - LASER_TIME) {
+      if (enemy.last_fire_time > tick_counter - enemy.laser_time) {
         let target = enemy.last_fire_target;
         ui.drawLine(enemy.x, enemy.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[8]);
       }
@@ -1578,21 +1613,11 @@ function drawMap(dt) {
   }
   for (let ii = 0; ii < fighters.length; ++ii) {
     let fighter = fighters[ii];
-    // if (fighter.x < viewx0 || fighter.x > viewx1 ||
-    //   fighter.y < viewy0 || fighter.y > viewy1
-    // ) {
-    //   sprite_space.draw({
-    //     ...fighter,
-    //     x: clamp(fighter.x, viewx0, viewx1),
-    //     y: clamp(fighter.y, viewy0, viewy1),
-    //   });
-    // } else {
     sprite_space.draw(fighter);
     if (fighter.last_fire_time > tick_counter - LASER_TIME) {
       let target = fighter.last_fire_target;
-      ui.drawLine(fighter.x, fighter.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[12]);
+      ui.drawLine(fighter.x, fighter.y, target.x, target.y, Z.PLAYER_LASERS, 1.5, 0.5, pico8.colors[12]);
     }
-    // }
   }
 
   drawGhost(viewx0, viewy0, viewx1, viewy1);

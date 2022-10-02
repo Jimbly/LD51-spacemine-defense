@@ -21,6 +21,7 @@ MVP
   * particles
   * art pass
   * more units: (need to rebalance level choices)
+    * repair (packets?)
     * boosters
     * more enemies / weapons
   * random easy/med/hard level select
@@ -52,6 +53,7 @@ X Factories should visually count up to 10 somehow, as well as show that they're
 X Progress
   X Show progress to completing the whole level, show time elapsed, this should be a filling up bar, probably?
 X Then: waves of enemies?  Is this fun already, how much time is left? =)
+* Enemies need random chance to change their target
 * Weapons
 * Currently being built stuff should take extra damage, and also refund some when destroyed
 * Unified display of "things out of supply" with a red line through them?

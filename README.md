@@ -21,7 +21,7 @@ X level defs
 X Fast forward / menu buttons
 X music bgm
 X music menu
-* SFX
+X SFX
 * New asteroid if no other gfx
   * 2 size variations
 * button GFX

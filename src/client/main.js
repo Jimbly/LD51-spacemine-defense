@@ -92,6 +92,8 @@ const SUPPLY_EMIT_TIME = 250;
 const FACTORY_SUPPLY = 10;
 
 const FIGHTER_JIGGLE = 0.005;
+const volume_sfx = 0.5;
+const volume_lasers = 0.3;
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -185,6 +187,8 @@ const ent_types = {
     max_links: Infinity,
     supply_source: true,
     hp: 200,
+    die_sound: 'die_structure',
+    build_sound: 'build4',
   },
   [TYPE_MINER]: {
     type: TYPE_MINER,
@@ -200,6 +204,8 @@ const ent_types = {
     supply_rate: 1/10000, // supply per millisecond
     max_links: 1,
     hp: 50,
+    die_sound: 'die_fighter',
+    build_sound: 'build3',
   },
   [TYPE_ROUTER]: {
     type: TYPE_ROUTER,
@@ -212,6 +218,7 @@ const ent_types = {
     r: 3,
     max_links: 5,
     hp: 20,
+    die_sound: 'die_fighter',
   },
   [TYPE_LASER]: {
     type: TYPE_LASER,
@@ -229,6 +236,8 @@ const ent_types = {
     r: RADIUS_DEFAULT,
     max_links: 1,
     hp: 100,
+    die_sound: 'die_structure',
+    build_sound: 'build4',
   },
   [TYPE_FIGHTERBAY]: {
     type: TYPE_FIGHTERBAY,
@@ -253,6 +262,8 @@ const ent_types = {
     fighter_hp: 3,
     hp: 200,
     z: Z.FIGHTERS,
+    die_sound: 'die_structure',
+    build_sound: 'build5',
   },
   [TYPE_ASTEROID]: {
     frame: FRAME_ASTEROID,
@@ -287,6 +298,7 @@ const enemy_types = [
     fire_time: 700,
     fire_time_rand: 200,
     laser_time: LASER_TIME,
+    alert_sound: 'alert1',
   },
   {
     wave_size: 4,
@@ -306,6 +318,7 @@ const enemy_types = [
     fire_time: 2500,
     fire_time_rand: 200,
     laser_time: BIG_LASER_TIME,
+    alert_sound: 'alert2',
   },
 ];
 
@@ -485,10 +498,10 @@ class Game {
     this.selected_ent = null;
     if (engine.DEBUG) {
       // this.game_over = true;
-      // this.paused = false;
-      // this.selected = TYPE_MINER;
+      this.paused = false;
+      this.selected = TYPE_MINER;
       // this.selected_ent = factory;
-      // this.money = 20000;
+      this.money = 20000;
     }
   }
 
@@ -553,6 +566,7 @@ class Game {
     if (!is_from_death) {
       this.money += this.scrapValue(ent);
     }
+    ui.playUISound(ent_types[ent.type].die_sound, volume_sfx);
     this.paths_dirty = true;
     delete map[ent.id];
     for (let ii = supply_links.length - 1; ii >= 0; --ii) {
@@ -829,6 +843,9 @@ class Game {
       // supply passes through us
       this.reorderSupply();
     }
+    if (ent_type.build_sound) {
+      ui.playUISound(ent_type.build_sound);
+    }
   }
 
   updatePacket(packet, dt) {
@@ -970,8 +987,8 @@ class Game {
     let idx = this.danger_idx++;
     let enemy_type = ld.danger_pattern[idx % ld.danger_pattern.length];
     let et = enemy_types[enemy_type];
+    ui.playUISound(et.alert_sound);
     let count = et.wave_size;
-    // TODO: announce!
     let dist = game_width * 0.75; // / 4;
     for (let ii = 0; ii < count; ++ii) {
       direction += (this.rand.random() - 0.5) * 0.5;
@@ -1023,7 +1040,8 @@ class Game {
   }
 
   damage(ent, amount) {
-    // TODO: particles, sounds
+    ui.playUISound('laser', volume_lasers);
+    // TODO: particles
     ent.hp -= amount;
     if (ent.hp <= 0) {
       this.scrap(ent, false, true);
@@ -1031,16 +1049,19 @@ class Game {
   }
 
   damageEnemy(enemy, amount) {
+    ui.playUISound('laser', volume_lasers);
     enemy.hp -= amount;
     if (enemy.hp <= 0) {
       enemy.dead = true;
       let idx = this.enemies.indexOf(enemy);
       assert(idx !== -1);
       ridx(this.enemies, idx);
+      ui.playUISound('die_enemy', volume_sfx);
     }
   }
 
   damageFighter(fighter, amount) {
+    ui.playUISound('laser', volume_lasers);
     fighter.hp -= amount;
     if (fighter.hp <= 0) {
       fighter.dead = true;
@@ -1048,6 +1069,7 @@ class Game {
       assert(idx !== -1);
       ridx(this.fighters, idx);
       fighter.bay.num_fighters--;
+      ui.playUISound('die_fighter', volume_sfx);
     }
   }
 
@@ -1557,7 +1579,7 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
     if (can_place && can_afford) {
       if (input.click({ max_dist: Infinity })) {
         game.place(place_param);
-        ui.playUISound('button_click');
+        ui.playUISound('place');
       }
     }
     sprite_space.draw(miner);
@@ -2051,7 +2073,6 @@ function drawHUD(dt) {
           disabled,
           hotkey: KEYS.DEL,
         })) {
-          // TODO
           game.scrap(selected_ent, is_scrap_all, false);
         } else if (!disabled && (input.keyDownEdge(KEYS.NUMPAD_DECIMAL_POINT) || input.keyDownEdge(KEYS.BACKSPACE))) {
           ui.playUISound('button_click');
@@ -2149,13 +2170,12 @@ function drawHUD(dt) {
     game.ff = false;
   }
   if (game.ff !== was_ff) {
-    ui.playUISound('button_click');
+    ui.playUISound(game.ff ? 'speed_fast' : 'speed_slow');
   }
   ui.buttonImage(ff_button);
 
 
   if (game.won || game.game_over) {
-    // TODO
     if (!win_anim) {
       win_anim = createAnimationSequencer();
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -2493,6 +2513,20 @@ export function main() {
     ui_sprites: defaults({
       panel: { name: 'pixely/panel', ws: [3, 6, 3], hs: [3, 6, 3] },
     }, ui_sprites),
+    ui_sounds: {
+      place: 'place',
+      die_enemy: 'explode_small',
+      die_fighter: 'explode_small2',
+      die_structure: ['explode_big', 'explode_big2', 'explode_big3'],
+      speed_fast: 'speed_fast',
+      speed_slow: 'speed_slow',
+      laser: ['laser1', 'laser2', 'laser3', 'laser4', 'laser5'],
+      build3: 'build3',
+      build4: 'build4',
+      build5: 'build5',
+      alert1: 'alert1',
+      alert2: 'alert2',
+    },
   })) {
     return;
   }
@@ -2531,8 +2565,8 @@ export function main() {
   stateTitleInit();
   engine.setState(stateTitle);
   if (engine.DEBUG) {
-    //playInit(0, false);
-    //engine.setState(statePlay);
-    levelSelectInit();
+    playInit(0, false);
+    engine.setState(statePlay);
+    //levelSelectInit();
   }
 }

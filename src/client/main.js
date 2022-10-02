@@ -22,6 +22,7 @@ import { mashString, randCreate } from 'glov/common/rand_alea.js';
 import {
   clamp,
   defaults,
+  easeOut,
   isInteger,
   lineCircleIntersect,
   lineLineIntersect,
@@ -302,14 +303,21 @@ const enemy_types = [
 
 const level_defs = {
   intro: {
-    num_asteroids: 20,
+    num_asteroids: 1,
     display_name: '1/2 Intro', seed: 'test2',
     subtitle: 'No danger, learn the basics',
+    // TODO: only fighters
+    max_enemy_type: 1,
+    danger_start: 6*3,
+    danger: 12,
   },
   med: {
     num_asteroids: 100,
     display_name: '2/2 Defense', seed: '1234',
     subtitle: 'TL;DR: Boss was wrong',
+    max_enemy_type: 2,
+    danger_start: 6,
+    danger: 3,
   },
   // hard: {
   //   num_asteroids: 100,
@@ -410,6 +418,7 @@ class Game {
   constructor(level_idx) {
     this.level_idx = level_idx;
     let ld = level_list[level_idx];
+    this.ld = ld;
     let w = this.w = game_width - PAD_LEFTRIGHT * 2;
     let h = this.h = game_height - PAD_TOP - PAD_BOTTOM;
     let rand = this.rand = randCreate(mashString(ld.seed));
@@ -459,6 +468,7 @@ class Game {
     this.paused = true;
     this.selected_ent = null;
     if (engine.DEBUG) {
+      // this.game_over = true;
       // this.paused = false;
       // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
@@ -919,7 +929,7 @@ class Game {
       enemies[ii].target_id = null;
     }
 
-    if (this.decaseconds > 6 && this.decaseconds % 3 === 0) {
+    if (this.decaseconds >= this.ld.danger_start && this.decaseconds % this.ld.danger === 0) {
       this.spawn_wave = true;
     }
 
@@ -941,7 +951,7 @@ class Game {
     this.spawn_wave = false;
     let { enemies, w, h } = this;
     let direction = this.rand.random() * PI * 2;
-    let enemy_type = this.rand.range(enemy_types.length);
+    let enemy_type = this.rand.range(this.ld.max_enemy_type);
     let et = enemy_types[enemy_type];
     let count = et.wave_size;
     // TODO: announce!
@@ -1225,6 +1235,9 @@ class Game {
   }
 
   getSelected(ignore_afford) {
+    if (this.game_over || this.won) {
+      return null;
+    }
     if (ignore_afford || this.canAfford(this.selected)) {
       return this.selected;
     }
@@ -1707,7 +1720,27 @@ function fmtSupply(v) {
   return v.toFixed(2);
 }
 
-function drawHUD() {
+let win_anim;
+let win_alpha = {
+  alpha: 0,
+};
+let style_win = fontStyle(null, {
+  color: pico8.font_colors[11],
+  outline_width: 1,
+  outline_color: pico8.font_colors[10],
+  glow_color: pico8.font_colors[10],
+  glow_inner: -5,
+  glow_outer: 4,
+  glow_xoffs: 1,
+  glow_yoffs: 1,
+});
+let style_game_over = fontStyle(style_win, {
+  color: pico8.font_colors[8],
+  outline_color: pico8.font_colors[2],
+  glow_color: pico8.font_colors[2],
+});
+
+function drawHUD(dt) {
   v3copy(engine.border_clear_color, pico8.colors[15]);
   camera2d.set(0, 0, game_width, game_height);
   sprites.border.draw({ x: 0, y: 0, w: game_width, h: game_height, z: Z.UI - 1 });
@@ -1735,7 +1768,7 @@ function drawHUD() {
           z: Z.UI + 3,
           w: CARD_W,
           h: CARD_ICON_W,
-          text: selected === null ? 'CANNOT\nAFFORD' : 'SELECTED',
+          text: (game.game_over || game.won) ? 'GAME\nOVER' : selected === null ? 'CANNOT\nAFFORD' : 'SELECTED',
           align: ALIGN.HVCENTER | ALIGN.HWRAP,
         });
       }
@@ -2079,6 +2112,44 @@ function drawHUD() {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
     engine.setState(stateLevelSelect);
   }
+
+
+  if (game.won || game.game_over) {
+    // TODO
+    if (!win_anim) {
+      win_anim = createAnimationSequencer();
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      let t = win_anim.add(0, 1000, (p) => {
+        win_alpha.alpha = p;
+      });
+      // t = win_anim.add(t + 200, 1000, (p) => {
+      //   win_alpha.desc = p;
+      // });
+    }
+    win_anim.update(dt);
+    title_font.draw({
+      alpha: easeOut(win_alpha.alpha, 2),
+      style: game.game_over ? style_game_over : style_win,
+      text: game.game_over ? 'GAME OVER' : 'LEVEL COMPLETE!',
+      x: 0, y: 0, w: game_width, h: game_height * 0.85,
+      size: ui.font_height * 8,
+      align: ALIGN.HVCENTER,
+    });
+    let button_w = ui.button_width * 3;
+    if (ui.buttonText({
+      x: (game_width - button_w) / 2, y: game_height * 5/8,
+      w: button_w,
+      h: status_h,
+      font_height: status_size,
+      color: [1,1,1,win_alpha.alpha],
+      text: game.game_over ? 'I\'ll do better next time' : 'I\'m good at this.',
+    })) {
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      engine.setState(stateLevelSelect);
+    }
+  } else {
+    win_anim = null;
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -2091,7 +2162,7 @@ function statePlay(dt) {
       game.selected_ent = null;
     }
   }
-  drawHUD();
+  drawHUD(dt);
   drawMap(dt);
   if (game.selected_ent && input.click()) {
     game.selected_ent = null;

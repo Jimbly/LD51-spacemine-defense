@@ -11,12 +11,12 @@ Start with: `npm start` (after running `npm i` once)
 MVP
 X 2 weapons
 X 2 enemy types
-* main menu, title screen
-  * 3 levels
-  * high score lists
-  * game over / you win screens
+X main menu, title screen
+  X 3 levels
+  X high score lists
+  X game over / you win screens
 * level defs
-  * need actual no danger
+  X need actual no danger
   * pacing of waves
 * Fast forward / menu buttons
 * music - 2 tracks, 10/20/30s each, one for battle, one for peacetime

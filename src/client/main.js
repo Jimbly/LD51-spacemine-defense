@@ -330,6 +330,8 @@ const level_defs = {
     danger_pattern: [0],
     danger_start: 6*3,
     danger: 12,
+    ore_base: 500,
+    ore_range: 1000,
   },
   med: {
     num_asteroids: 100,
@@ -338,6 +340,8 @@ const level_defs = {
     danger_pattern: [0,0,0,1,0,0,1],
     danger_start: 6,
     danger: 3,
+    ore_base: 500,
+    ore_range: 1000,
   },
   // hard: {
   //   num_asteroids: 100,
@@ -471,7 +475,7 @@ class Game {
     factory.frame = ent_types[TYPE_FACTORY].frame_full;
 
     let total_value = 0;
-    for (let ii = 0; ii < num_asteroids; ++ii) {
+    while (num_asteroids) {
       let x = rand.floatBetween(0, 1);
       x = x * x * 0.9 + 0.05;
       x *= (rand.range(2) ? -1 : 1);
@@ -480,13 +484,18 @@ class Game {
       y = y * y * 0.9 + 0.05;
       y *= (rand.range(2) ? -1 : 1);
       y = y * h / 2 + h / 2;
+      if (this.entNear({ x, y })) {
+        continue;
+      }
       let ent = this.addEnt({
         type: TYPE_ASTEROID,
         x, y,
         rot: rand.random() * PI * 2,
-        value: 500 + rand.range(1000),
+        value: ld.ore_base + rand.range(ld.ore_range),
       });
       total_value += ent.value;
+      this.updateAsteroidSize(ent);
+      --num_asteroids;
     }
     this.value_mined = 0;
     this.total_value = total_value;
@@ -503,6 +512,23 @@ class Game {
       // this.selected_ent = factory;
       this.money = 20000;
     }
+  }
+
+  entNear(pos) {
+    let { map } = this;
+    let rsq = RADIUS_DEFAULT * RADIUS_DEFAULT;
+    for (let key in map) {
+      if (entDistSq(pos, map[key]) <= rsq) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  updateAsteroidSize(ent) {
+    let v = clamp(1.0 + (ent.value - this.ld.ore_base) / this.ld.ore_range, 0.5, 1.5);
+    ent.w = ent.h = SPRITE_W * v;
+    ent.r = RADIUS_DEFAULT * v;
   }
 
   tickWrap() {
@@ -643,6 +669,8 @@ class Game {
         asteroid.dead_asteroid = true;
         asteroid.frame = FRAME_ASTEROID_EMPTY;
         asteroid.z = Z[FRAME_ASTEROID_EMPTY];
+      } else {
+        this.updateAsteroidSize(asteroid);
       }
       this.money += mined;
 

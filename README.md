@@ -22,9 +22,9 @@ X Fast forward / menu buttons
 X music bgm
 X music menu
 X SFX
-* New asteroid if no other gfx
-  * 2 size variations
-* button GFX
+X New asteroid if no other gfx
+  X 2 size variations
+X button GFX
 * waves ramp up in difficulty
 * stretch:
   * only do N search for targets each frame

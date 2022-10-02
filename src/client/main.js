@@ -341,7 +341,7 @@ const level_defs = {
     display_name: '1/3 Intro', seed: 'test1',
     subtitle: 'No danger, learn the basics',
     danger_pattern: [0],
-    danger_start: 6*3,
+    danger_start: 6*5,
     danger: 12,
     ore_base: 500,
     ore_range: 1000,

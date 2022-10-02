@@ -34,6 +34,7 @@ X button GFX
     * repair (packets?)
     * boosters
     * more enemies / weapons
+  * get more money back from scrapping unbuilt things
   * random easy/med/hard level select
   * only do N search for targets each frame
 

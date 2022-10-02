@@ -308,7 +308,7 @@ const level_defs = {
     num_asteroids: 20,
     display_name: '1/2 Intro', seed: 'test2',
     subtitle: 'No danger, learn the basics',
-    max_enemy_type: 1,
+    danger_pattern: [0],
     danger_start: 6*3,
     danger: 12,
   },
@@ -316,7 +316,7 @@ const level_defs = {
     num_asteroids: 100,
     display_name: '2/2 Defense', seed: '1234',
     subtitle: 'TL;DR: Boss was wrong',
-    max_enemy_type: 2,
+    danger_pattern: [0,0,0,1,0,0,1],
     danger_start: 6,
     danger: 3,
   },
@@ -434,6 +434,7 @@ class Game {
     this.paths_dirty = true;
     this.enemies = [];
     this.fighters = [];
+    this.danger_idx = 0;
 
     let factory = this.addEnt({
       type: TYPE_FACTORY,
@@ -951,9 +952,10 @@ class Game {
       return;
     }
     this.spawn_wave = false;
-    let { enemies, w, h } = this;
+    let { enemies, w, h, ld } = this;
     let direction = this.rand.random() * PI * 2;
-    let enemy_type = this.rand.range(this.ld.max_enemy_type);
+    let idx = this.danger_idx++;
+    let enemy_type = ld.danger_pattern[idx % ld.danger_pattern.length];
     let et = enemy_types[enemy_type];
     let count = et.wave_size;
     // TODO: announce!

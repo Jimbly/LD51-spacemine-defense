@@ -15,9 +15,9 @@ X main menu, title screen
   X 3 levels
   X high score lists
   X game over / you win screens
-* level defs
+X level defs
   X need actual no danger
-  * pacing of waves
+  X pacing of waves
 X Fast forward / menu buttons
 * music - 2 tracks, 10/20/30s each, one for battle, one for peacetime
 * SFX

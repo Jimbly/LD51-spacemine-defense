@@ -9,13 +9,15 @@ Ludum Dare 51 Entry by Jimbly - "Name TBD"
 Start with: `npm start` (after running `npm i` once)
 
 MVP
-* 2 weapons
-* 2 enemy types
+X 2 weapons
+X 2 enemy types
 * main menu, title screen
   * 3 levels
   * high score lists
+  * game over / you win screens
 * music - 2 tracks, 10/20/30s each, one for battle, one for peacetime
 * SFX
+* New asteroid if no other gfx
 * Button GFX
 * stretch:
   * particles

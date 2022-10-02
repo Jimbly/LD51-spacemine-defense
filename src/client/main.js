@@ -423,7 +423,7 @@ class Game {
     this.decaseconds = 0;
     this.paused = true;
     this.selected_ent = null;
-    if (engine.DEBUG && false) {
+    if (engine.DEBUG) {
       this.paused = false;
       // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
@@ -850,6 +850,9 @@ class Game {
         ent.supply = min(ent_type.supply_max, ent.supply + ent_type.supply_prod);
         ent.frame = ent_type.frame_full;
       }
+      if (ent.launched_fighter_this_deca) {
+        ent.launched_fighter_this_deca = false;
+      }
       if (this.needsSupply(ent, false)) {
         needs_supply.push(ent);
       }
@@ -1103,9 +1106,10 @@ class Game {
     if (ent.supply < ent_type.supply_per_shot) {
       return;
     }
-    if (ent.num_fighters >= ent_type.max_fighters) {
+    if (ent.num_fighters >= ent_type.max_fighters || ent.launched_fighter_this_deca) {
       return;
     }
+    ent.launched_fighter_this_deca = true;
     ent.num_fighters++;
     ent.supply -= ent_type.supply_per_shot;
     let fighter = Object.create(ent_type);
@@ -1898,6 +1902,14 @@ function drawHUD() {
           text: `Cost to build: ${ent_type.cost}g and ${ent_type.cost_supply} Supply`,
         });
         y += line_height;
+        if (game.selected === TYPE_FIGHTERBAY) {
+          font.draw({
+            color: pico8.font_colors[3],
+            x, y,
+            text: 'Hint: Build close to a factory',
+          });
+          y += line_height;
+        }
 
       } else {
         // details on real ent

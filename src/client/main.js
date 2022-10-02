@@ -45,6 +45,10 @@ import {
   FRAME_FACTORY_BUILDING,
   FRAME_FACTORY_EMPTY,
   FRAME_FACTORY_READY,
+  FRAME_FIGHTER,
+  FRAME_FIGHTERBAY,
+  FRAME_FIGHTERBAY_BUILDING,
+  FRAME_FIGHTERBAY_EMPTY,
   FRAME_LASER,
   FRAME_LASER_BUILDING,
   FRAME_LASER_EMPTY,
@@ -66,11 +70,14 @@ const TYPE_ASTEROID = 'asteroid';
 const TYPE_FACTORY = 'factory';
 const TYPE_ROUTER = 'router';
 const TYPE_LASER = 'laser';
+const TYPE_FIGHTERBAY = 'fbay';
 
 const PACKET_SPEED = 100/1000; // pixels per millisecond
 const SUPPLY_EMIT_TIME = 250;
 
 const FACTORY_SUPPLY = 10;
+
+const FIGHTER_JIGGLE = 0.005;
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -81,13 +88,15 @@ Z.LINKS = 15;
 Z[FRAME_ROUTER] = 20;
 Z.SUPPLY = 25;
 Z[FRAME_LASER] = 30;
+Z[FRAME_FIGHTERBAY] = 30;
 Z[FRAME_MINERDONE] = 30;
 Z[FRAME_MINER] = 30;
 Z[FRAME_MINERUP] = 35;
 Z[FRAME_MINERUL] = 35;
 Z[FRAME_FACTORY] = 40;
 
-Z.ENEMIES = 45;
+Z.ENEMIES = 44;
+Z.FIGHTERS = 45;
 Z.ENEMY_LASERS = 46;
 Z.PLAYER_LASERS = 47;
 Z.BUILDING_BAR = 50;
@@ -202,6 +211,30 @@ const ent_types = {
     max_links: 1,
     hp: 100,
   },
+  [TYPE_FIGHTERBAY]: {
+    type: TYPE_FIGHTERBAY,
+    frame: FRAME_FIGHTERBAY,
+    frame_building: FRAME_FIGHTERBAY_BUILDING,
+    frame_nosupply: FRAME_FIGHTERBAY_EMPTY,
+    w: 15, h: 15,
+    label: 'F\'terbay',
+    cost: 1200,
+    cost_supply: 6,
+    supply_max: 10,
+    range_sq: 16*16,
+    fire_time: 300,
+    supply_per_shot: 10,
+    max_fighters: 10,
+    damage: 2,
+    angle_of_fire: PI/4,
+    speed: 12/1000, // pixels per ms
+    turning: 0.001, // radians per ms
+    r: RADIUS_DEFAULT + 1,
+    max_links: 1,
+    fighter_hp: 3,
+    hp: 200,
+    z: Z.FIGHTERS,
+  },
   [TYPE_ASTEROID]: {
     frame: FRAME_ASTEROID,
     max_links: 0,
@@ -213,6 +246,7 @@ const buttons = [
   TYPE_MINER,
   TYPE_ROUTER,
   TYPE_LASER,
+  TYPE_FIGHTERBAY,
 ];
 
 const link_color_supply = [pico8.colors[9], pico8.colors[4]];
@@ -275,8 +309,8 @@ class Game {
   addEnt(ent) {
     let ent_type = ent_types[ent.type];
     ent.frame = ent.frame || ent_type.frame;
-    ent.w = ent.w || SPRITE_W;
-    ent.h = ent.h || SPRITE_W;
+    ent.w = ent.w || ent_type.w || SPRITE_W;
+    ent.h = ent.h || ent_type.h || SPRITE_W;
     ent.z = ent.z || Z[ent.frame];
     ent.r = ent.r || ent_type.r || RADIUS_DEFAULT;
     ent.hp = ent.hp || ent_type.hp || 0;
@@ -290,7 +324,7 @@ class Game {
     if (ent.supply_source) {
       ent.order_time_accum = 0;
       ent.orders = [];
-      ent.frame = ent_type.frame_empty;
+      // ent.frame = ent_type.frame_empty;
     }
     this.map[++this.last_id] = ent;
     ent.id = this.last_id;
@@ -310,6 +344,7 @@ class Game {
     this.round_robin_id = 0;
     this.paths_dirty = true;
     this.enemies = [];
+    this.fighters = [];
 
     let factory = this.addEnt({
       type: TYPE_FACTORY,
@@ -761,7 +796,7 @@ class Game {
   }
 
   every10Seconds() {
-    let { map, round_robin_id } = this;
+    let { map, round_robin_id, fighters } = this;
     this.decaseconds++;
     // Generate supply, assemble list of who needs
     let needs_supply = [];
@@ -789,6 +824,10 @@ class Game {
       if (this.pullSupply(ent)) {
         this.round_robin_id = ent.id;
       }
+    }
+
+    for (let ii = 0; ii < fighters.length; ++ii) {
+      fighters[ii].patrol_target = null;
     }
 
     if (this.decaseconds > 6 && this.decaseconds % 3 === 0) {
@@ -849,7 +888,7 @@ class Game {
     return best;
   }
 
-  weaponFindTarget(ent) {
+  weaponFindTarget(ent, within_range) {
     let { enemies } = this;
     let ent_type = ent_types[ent.type];
     let best = null;
@@ -857,7 +896,10 @@ class Game {
     for (let ii = 0; ii < enemies.length; ++ii) {
       let enemy = enemies[ii];
       let d = entDistSq(enemy, ent);
-      if (d < bestd && d <= ent_type.range_sq) {
+      if (d < bestd && (
+        !within_range && enemy.x > 0 && enemy.y > 0 && enemy.x < this.w && enemy.y < this.h ||
+        d <= ent_type.range_sq
+      )) {
         best = enemy;
         bestd = d;
       }
@@ -883,10 +925,18 @@ class Game {
     }
   }
 
-  updateLaser(ent) {
-    if (!ent.supply) {
-      return;
+  damageFighter(fighter, amount) {
+    fighter.hp -= amount;
+    if (fighter.hp <= 0) {
+      fighter.dead = true;
+      let idx = this.fighters.indexOf(fighter);
+      assert(idx !== -1);
+      ridx(this.fighters, idx);
+      fighter.bay.num_fighters--;
     }
+  }
+
+  weaponUpdateTarget(ent, within_range) { // or fighter
     let { target } = ent;
     let ent_type = ent_types[ent.type];
     if (target && target.dead) {
@@ -896,12 +946,24 @@ class Game {
       target = null;
     }
     if (!target) {
-      target = this.weaponFindTarget(ent);
+      target = this.weaponFindTarget(ent, within_range);
       if (!target) {
         return;
       }
       ent.target = target;
     }
+  }
+
+  updateLaser(ent) {
+    if (!ent.supply) {
+      return;
+    }
+    this.weaponUpdateTarget(ent, true);
+    let { target } = ent;
+    if (!target) {
+      return;
+    }
+    let ent_type = ent_types[ent.type];
     if (this.tick_counter - ent.last_fire_time >= ent_type.fire_time) {
       // can fire
       ent.last_fire_time = this.tick_counter;
@@ -912,6 +974,78 @@ class Game {
         this.pullSupply(ent);
       }
     }
+  }
+
+  updateShip(entlike, target, dt, firefunc, also_target_fighters) {
+    if (target) {
+      let desired_rot = desiredRot(entlike, target);
+      if (entlike.rot < desired_rot - PI) {
+        entlike.rot += PI * 2;
+      }
+      if (entlike.rot > desired_rot + PI) {
+        entlike.rot -= PI * 2;
+      }
+      let drot = abs(entlike.rot - desired_rot);
+      let rot_allowed = entlike.turning * dt;
+      if (drot < rot_allowed) {
+        entlike.rot = desired_rot;
+      } else {
+        if (entlike.rot < desired_rot) {
+          entlike.rot += rot_allowed;
+        } else {
+          entlike.rot -= rot_allowed;
+        }
+      }
+
+      drot = abs(entlike.rot - desired_rot);
+      let dist_sq = entDistSq(entlike, target);
+      if (this.tick_counter - entlike.last_fire_time >= entlike.fire_time) {
+        // can fire
+        if (!target.no_fire && drot < entlike.angle_of_fire && dist_sq < entlike.range_sq) {
+          // target in range
+          entlike.last_fire_time = this.tick_counter;
+          entlike.last_fire_target = target;
+          this[firefunc](target, entlike.damage);
+        } else if (also_target_fighters) {
+          // any fighters in range?
+          let { fighters } = this;
+          for (let ii = 0; ii < fighters.length; ++ii) {
+            let fighter = fighters[ii];
+            let fighter_dist_sq = entDistSq(fighter, entlike);
+            if (fighter_dist_sq < entlike.range_sq &&
+              abs(entlike.rot - desiredRot(entlike, fighter)) < entlike.angle_of_fire
+            ) {
+              entlike.last_fire_time = this.tick_counter;
+              entlike.last_fire_target = fighter;
+              this.damageFighter(fighter, entlike.damage);
+            }
+          }
+        }
+      }
+    }
+    let cosr = cos(entlike.rot);
+    let sinr = sin(entlike.rot);
+    entlike.x += sinr * entlike.speed * dt;
+    entlike.y += -cosr * entlike.speed * dt;
+  }
+
+  updateFighter(ent, dt) {
+    this.weaponUpdateTarget(ent, false);
+    let { target } = ent;
+    if (!target) {
+      if (!ent.patrol_target) {
+        ent.patrol_target = {
+          x: this.w / 4 + random() * this.w / 2,
+          y: this.h / 4 + random() * this.h / 2,
+          no_fire: true,
+        };
+      }
+      target = ent.patrol_target;
+    } else {
+      ent.patrol_target = null;
+    }
+    ent.rot += (random() - 0.5) * FIGHTER_JIGGLE * dt;
+    this.updateShip(ent, target, dt, 'damageEnemy', false);
   }
 
   updateEnemy(enemy, dt) {
@@ -925,41 +1059,30 @@ class Game {
       }
       target = this.map[enemy.target_id];
     }
-    if (target) {
-      let desired_rot = desiredRot(enemy, target);
-      if (enemy.rot < desired_rot - PI) {
-        enemy.rot += PI * 2;
-      }
-      if (enemy.rot > desired_rot + PI) {
-        enemy.rot -= PI * 2;
-      }
-      let drot = abs(enemy.rot - desired_rot);
-      let rot_allowed = enemy.turning * dt;
-      if (drot < rot_allowed) {
-        enemy.rot = desired_rot;
-      } else {
-        if (enemy.rot < desired_rot) {
-          enemy.rot += rot_allowed;
-        } else {
-          enemy.rot -= rot_allowed;
-        }
-      }
+    this.updateShip(enemy, target, dt, 'damage', true);
+  }
 
-      drot = abs(enemy.rot - desired_rot);
-      let dist_sq = entDistSq(enemy, target);
-      if (drot < enemy.angle_of_fire && dist_sq < enemy.range_sq &&
-        this.tick_counter - enemy.last_fire_time >= enemy.fire_time
-      ) {
-        // can fire
-        enemy.last_fire_time = this.tick_counter;
-        enemy.last_fire_target = target;
-        this.damage(target, enemy.damage);
-      }
+  updateFighterbay(ent) {
+    let ent_type = ent_types[ent.type];
+    if (ent.supply < ent_type.supply_per_shot) {
+      return;
     }
-    let cosr = cos(enemy.rot);
-    let sinr = sin(enemy.rot);
-    enemy.x += sinr * enemy.speed * dt;
-    enemy.y += -cosr * enemy.speed * dt;
+    if (ent.num_fighters >= ent_type.max_fighters) {
+      return;
+    }
+    ent.num_fighters++;
+    ent.supply -= ent_type.supply_per_shot;
+    let fighter = Object.create(ent_type);
+    fighter.x = ent.x;
+    fighter.y = ent.y;
+    fighter.frame = FRAME_FIGHTER;
+    fighter.bay = ent;
+    fighter.last_fire_time = 0;
+    fighter.rot = this.rand.random() * PI * 2;
+    fighter.hp = ent_type.fighter_hp;
+    fighter.max_hp = fighter.hp;
+    this.fighters.push(fighter);
+    this.pullSupply(ent);
   }
 
   tick(dt) {
@@ -975,7 +1098,7 @@ class Game {
       this.spawnWave();
     }
 
-    let { map, packets, enemies } = this;
+    let { map, packets, enemies, fighters } = this;
     for (let key in map) {
       let ent = map[key];
       if (ent.building) {
@@ -990,6 +1113,8 @@ class Game {
         this.updateMiner(ent, dt);
       } else if (ent.type === TYPE_LASER) {
         this.updateLaser(ent);
+      } else if (ent.type === TYPE_FIGHTERBAY) {
+        this.updateFighterbay(ent);
       }
     }
 
@@ -1002,6 +1127,10 @@ class Game {
 
     for (let ii = 0; ii < enemies.length; ++ii) {
       this.updateEnemy(enemies[ii], dt);
+    }
+
+    for (let ii = 0; ii < fighters.length; ++ii) {
+      this.updateFighter(fighters[ii], dt);
     }
   }
 
@@ -1217,6 +1346,9 @@ class Game {
     if (selected === TYPE_LASER) {
       ent.last_fire_time = 0;
     }
+    if (selected === TYPE_FIGHTERBAY) {
+      ent.num_fighters = 0;
+    }
     this.money -= cost;
 
     this.pullSupply(ent);
@@ -1267,11 +1399,12 @@ function drawGhost(viewx0, viewy0, viewx1, viewy1) {
     if (!can_afford) {
       place_color[3] = 0.5;
     }
+    let ent_type = ent_types[selected];
     let miner = {
       x, y, z: Z.PLACE_PREVIEW,
-      w: SPRITE_W,
-      h: SPRITE_W,
-      frame: ent_types[selected].frame,
+      w: ent_type.w || SPRITE_W,
+      h: ent_type.h || SPRITE_W,
+      frame: ent_type.frame,
       color: place_color,
     };
     let { links } = place_param;
@@ -1325,7 +1458,7 @@ function drawMap(dt) {
   let blink = ((game.tick_counter % 10000) > 9000) &&
     game.tick_counter % 250 > 125;
 
-  let { map, supply_links, packets, enemies, tick_counter } = game;
+  let { map, supply_links, packets, enemies, fighters, tick_counter } = game;
   for (let key in map) {
     let elem = map[key];
     let frame_save = elem.frame;
@@ -1442,6 +1575,24 @@ function drawMap(dt) {
         ui.drawLine(enemy.x, enemy.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[8]);
       }
     }
+  }
+  for (let ii = 0; ii < fighters.length; ++ii) {
+    let fighter = fighters[ii];
+    // if (fighter.x < viewx0 || fighter.x > viewx1 ||
+    //   fighter.y < viewy0 || fighter.y > viewy1
+    // ) {
+    //   sprite_space.draw({
+    //     ...fighter,
+    //     x: clamp(fighter.x, viewx0, viewx1),
+    //     y: clamp(fighter.y, viewy0, viewy1),
+    //   });
+    // } else {
+    sprite_space.draw(fighter);
+    if (fighter.last_fire_time > tick_counter - LASER_TIME) {
+      let target = fighter.last_fire_target;
+      ui.drawLine(fighter.x, fighter.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[12]);
+    }
+    // }
   }
 
   drawGhost(viewx0, viewy0, viewx1, viewy1);
@@ -1626,6 +1777,13 @@ function drawHUD() {
         x, y,
         text: ent_type.label,
       });
+      font.draw({
+        color: pico8.font_colors[0],
+        x, y,
+        w: panel_param.x + panel_param.w - 4 - x,
+        align: font.ALIGN.HCENTER,
+        text: game.selected ? `${ent_type.hp} HP` : `${selected_ent.hp} / ${selected_ent.hp_max} HP`,
+      });
       y += line_height;
 
       if (ent_type.desc) {
@@ -1652,29 +1810,50 @@ function drawHUD() {
         y += line_height;
       }
 
-      if (ent_type.damage) {
+      if (type === TYPE_FIGHTERBAY) {
         font.draw({
           color: pico8.font_colors[0],
           x, y,
-          text: `Damage: ${ent_type.damage}`,
+          text: `Supply per Fighter: ${ent_type.supply_per_shot}`,
         });
         y += line_height;
-      }
-      if (ent_type.fire_time) {
         font.draw({
           color: pico8.font_colors[0],
           x, y,
-          text: `Shots every 10 seconds: ${10000 / ent_type.fire_time}`,
+          text: `Fighter HP: ${ent_type.fighter_hp}`,
         });
         y += line_height;
-      }
-      if (ent_type.supply_per_shot) {
         font.draw({
           color: pico8.font_colors[0],
           x, y,
-          text: `Shots per Supply: ${1 / ent_type.supply_per_shot}`,
+          text: `Fighter Damage: ${ent_type.damage}`,
         });
         y += line_height;
+      } else {
+        if (ent_type.damage) {
+          font.draw({
+            color: pico8.font_colors[0],
+            x, y,
+            text: `Damage: ${ent_type.damage}`,
+          });
+          y += line_height;
+        }
+        if (ent_type.fire_time) {
+          font.draw({
+            color: pico8.font_colors[0],
+            x, y,
+            text: `Shots every 10 seconds: ${10000 / ent_type.fire_time}`,
+          });
+          y += line_height;
+        }
+        if (ent_type.supply_per_shot) {
+          font.draw({
+            color: pico8.font_colors[0],
+            x, y,
+            text: `Shots per Supply: ${1 / ent_type.supply_per_shot}`,
+          });
+          y += line_height;
+        }
       }
       if (ent_type.supply_max) {
         font.draw({

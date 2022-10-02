@@ -163,6 +163,9 @@ function init() {
   sprites.starfield = createSprite({
     name: 'starfield',
   });
+  sprites.fighter = createSprite({
+    name: 'fighter',
+  });
   ui.loadUISprite('card_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('reticule_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('card_button', [3, 2, 3], [CARD_H]);
@@ -532,7 +535,7 @@ class Game {
       // this.paused = false;
       // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
-      // this.money = 20000;
+      this.money = 20000;
     }
   }
 
@@ -2464,6 +2467,7 @@ function stateLevelSelect(dt) {
 
 let title_anim;
 let title_alpha = {
+  image: 0,
   title: 0,
   desc: 0,
   sub: 0,
@@ -2473,6 +2477,9 @@ function stateTitleInit() {
   soundPlayMusic('menu', 0.75, FADE);
   title_anim = createAnimationSequencer();
   let t = title_anim.add(0, 300, (progress) => {
+    title_alpha.image = progress;
+  });
+  t = title_anim.add(t + 500, 300, (progress) => {
     title_alpha.title = progress;
   });
   t = title_anim.add(t + 200, 1000, (progress) => {
@@ -2499,7 +2506,7 @@ function stateTitle(dt) {
     }
   }
 
-  let y = 40;
+  let y = 16;
 
   title_font.draw({
     style: style_title,
@@ -2508,8 +2515,7 @@ function stateTitle(dt) {
     size: 30,
     text: 'Spacemine Defense',
   });
-
-  y += 40;
+  y += 32;
   font.draw({
     color: pico8.font_colors[5],
     alpha: title_alpha.sub,
@@ -2523,8 +2529,19 @@ function stateTitle(dt) {
     x: 0, y, w: W, align: ALIGN.HCENTER,
     text: 'Heavily inspired by "The Space Game"',
   });
+  y += ui.font_height + 2;
 
-  y += 50;
+  const FW = 130;
+  const FH = 103;
+  sprites.fighter.draw({
+    x: floor((W - FW)/2),
+    y,
+    w: FW, h: FH,
+    color: [1,1,1,title_alpha.image],
+  });
+  y += FH;
+
+
   font.draw({
     color: pico8.font_colors[6],
     alpha: title_alpha.desc,
@@ -2542,7 +2559,7 @@ function stateTitle(dt) {
     let button = {
       color: [1,1,1, title_alpha.button],
       x: (W - button_w) / 2,
-      y: H - button_h - 24,
+      y: H - button_h - 22,
       w: button_w,
       h: button_h,
       text: 'Play',
@@ -2642,8 +2659,8 @@ export function main() {
   stateTitleInit();
   engine.setState(stateTitle);
   if (engine.DEBUG) {
-    playInit(1, false);
-    engine.setState(statePlay);
+    //playInit(1, false);
+    //engine.setState(statePlay);
     //levelSelectInit();
   }
 }

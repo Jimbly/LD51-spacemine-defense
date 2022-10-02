@@ -18,7 +18,7 @@ X main menu, title screen
 * level defs
   X need actual no danger
   * pacing of waves
-* Fast forward / menu buttons
+X Fast forward / menu buttons
 * music - 2 tracks, 10/20/30s each, one for battle, one for peacetime
 * SFX
 * New asteroid if no other gfx

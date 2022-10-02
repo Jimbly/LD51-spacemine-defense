@@ -65,6 +65,8 @@ import {
   FRAME_MINER_BUILDING,
   FRAME_ROUTER,
   FRAME_ROUTER_BUILDING,
+  FRAME_SPEED_FF,
+  FRAME_SPEED_PLAY,
   FRAME_SUPPLY,
   sprite_space,
 } from './img/space.js';
@@ -303,10 +305,9 @@ const enemy_types = [
 
 const level_defs = {
   intro: {
-    num_asteroids: 1,
+    num_asteroids: 20,
     display_name: '1/2 Intro', seed: 'test2',
     subtitle: 'No danger, learn the basics',
-    // TODO: only fighters
     max_enemy_type: 1,
     danger_start: 6*3,
     danger: 12,
@@ -417,6 +418,7 @@ class Game {
 
   constructor(level_idx) {
     this.level_idx = level_idx;
+    this.ff = false;
     let ld = level_list[level_idx];
     this.ld = ld;
     let w = this.w = game_width - PAD_LEFTRIGHT * 2;
@@ -481,7 +483,7 @@ class Game {
       return;
     }
     let dt = engine.getFrameDt();
-    if (input.keyDown(KEYS.SHIFT)) {
+    if (this.ff) {
       dt *= 10;
     }
     while (dt > 16) {
@@ -2103,8 +2105,9 @@ function drawHUD(dt) {
 
   x += progress_w + 2;
 
+  x = game_width - ui.button_width - 4;
   if (ui.button({
-    x: game_width - ui.button_width - 4, y: 0,
+    x, y: 0,
     h: status_h,
     font_height: status_size,
     text: 'Menu',
@@ -2112,6 +2115,28 @@ function drawHUD(dt) {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
     engine.setState(stateLevelSelect);
   }
+
+  x -= status_h + 2;
+  let ff_button = {
+    img: sprite_space,
+    shrink: 16/status_h,
+    frame: FRAME_SPEED_PLAY,
+    x, y: 0, h: status_h, w: status_h,
+    sound_button: null,
+    tooltip: 'Fast Forward (hotkeys: F, SHIFT)',
+  };
+  let was_ff = game.ff;
+  if (input.mouseDownOverBounds(ff_button) || input.keyDown(KEYS.SHIFT) || input.keyDown(KEYS.F)) {
+    ff_button.frame = FRAME_SPEED_FF;
+    ff_button.base_name = 'buttongreen';
+    game.ff = true;
+  } else {
+    game.ff = false;
+  }
+  if (game.ff !== was_ff) {
+    ui.playUISound('button_click');
+  }
+  ui.buttonImage(ff_button);
 
 
   if (game.won || game.game_over) {

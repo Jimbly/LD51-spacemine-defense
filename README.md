@@ -8,6 +8,22 @@ Ludum Dare 51 Entry by Jimbly - "Name TBD"
 
 Start with: `npm start` (after running `npm i` once)
 
+MVP
+* 2 weapons
+* 2 enemy types
+* main menu, title screen
+  * 3 levels
+  * high score lists
+* music - 2 tracks, 10/20/30s each, one for battle, one for peacetime
+* SFX
+* Button GFX
+* stretch:
+  * particles
+  * art pass
+  * more units: (need to rebalance level choices)
+    * boosters
+    * more enemies / weapons
+  * random easy/med/hard level select
 
 The 10 Second Space Game
 X Field of asteroids
@@ -37,8 +53,9 @@ X Progress
   X Show progress to completing the whole level, show time elapsed, this should be a filling up bar, probably?
 X Then: waves of enemies?  Is this fun already, how much time is left? =)
 * Weapons
-* Next unit: other supply generator (cheap, cannot be tightly packed)?
 * Currently being built stuff should take extra damage, and also refund some when destroyed
+* Unified display of "things out of supply" with a red line through them?
+* Next unit: other supply generator (cheap, cannot be tightly packed)?
 * Unit ideas:
   * Miner Booster
   * Weapons Booster

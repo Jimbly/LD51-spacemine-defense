@@ -16,6 +16,7 @@ import { createSprite } from 'glov/client/sprites.js';
 import * as ui from 'glov/client/ui.js';
 import { mashString, randCreate } from 'glov/common/rand_alea.js';
 import {
+  clamp,
   defaults,
   isInteger,
   lineCircleIntersect,
@@ -86,12 +87,14 @@ Z[FRAME_MINERUP] = 35;
 Z[FRAME_MINERUL] = 35;
 Z[FRAME_FACTORY] = 40;
 
-Z.ENEMY_LASERS = 46;
 Z.ENEMIES = 45;
+Z.ENEMY_LASERS = 46;
+Z.PLAYER_LASERS = 47;
 Z.BUILDING_BAR = 50;
 Z.PLACE_PREVIEW = 60;
 
 const LASER_TIME = 100;
+const PLAYER_LASER_TIME = 150;
 
 const { KEYS } = input;
 
@@ -191,6 +194,10 @@ const ent_types = {
     cost: 500,
     cost_supply: 5,
     supply_max: 10,
+    range_sq: 50*50,
+    fire_time: 500,
+    supply_per_shot: 0.5,
+    damage: 3,
     r: RADIUS_DEFAULT,
     max_links: 1,
     hp: 100,
@@ -799,7 +806,7 @@ class Game {
     let direction = this.rand.random() * PI * 2;
     let count = 20;
     // TODO: announce!
-    let dist = game_width / 4;
+    let dist = game_width * 0.75; // / 4;
     for (let ii = 0; ii < count; ++ii) {
       direction += (this.rand.random() - 0.5) * 0.5;
       let cosd = cos(direction);
@@ -843,11 +850,65 @@ class Game {
     return best;
   }
 
+  weaponFindTarget(ent) {
+    let { enemies } = this;
+    let ent_type = ent_types[ent.type];
+    let best = null;
+    let bestd = Infinity;
+    for (let ii = 0; ii < enemies.length; ++ii) {
+      let enemy = enemies[ii];
+      let d = entDistSq(enemy, ent);
+      if (d < bestd && d <= ent_type.range_sq) {
+        best = enemy;
+        bestd = d;
+      }
+    }
+    return best;
+  }
+
   damage(ent, amount) {
     // TODO: particles, sounds
     ent.hp -= amount;
     if (ent.hp <= 0) {
       this.scrap(ent, false, true);
+    }
+  }
+
+  damageEnemy(enemy, amount) {
+    enemy.hp -= amount;
+    if (enemy.hp <= 0) {
+      enemy.dead = true;
+      let idx = this.enemies.indexOf(enemy);
+      assert(idx !== -1);
+      ridx(this.enemies, idx);
+    }
+  }
+
+  updateLaser(ent) {
+    if (!ent.supply) {
+      return;
+    }
+    let { target } = ent;
+    let ent_type = ent_types[ent.type];
+    if (target && target.dead) {
+      ent.target = target = null;
+    }
+    if (target && entDistSq(ent, target) > ent_type.range_sq) {
+      target = null;
+    }
+    if (!target) {
+      target = this.weaponFindTarget(ent);
+      if (!target) {
+        return;
+      }
+      ent.target = target;
+    }
+    if (this.tick_counter - ent.last_fire_time >= ent_type.fire_time) {
+      // can fire
+      ent.last_fire_time = this.tick_counter;
+      ent.last_fire_target = target;
+      ent.supply = max(0, ent.supply - ent_type.supply_per_shot);
+      this.damageEnemy(target, ent_type.damage);
     }
   }
 
@@ -925,6 +986,8 @@ class Game {
 
       if (ent.type === TYPE_MINER) {
         this.updateMiner(ent, dt);
+      } else if (ent.type === TYPE_LASER) {
+        this.updateLaser(ent);
       }
     }
 
@@ -1149,6 +1212,9 @@ class Game {
       //assert(ent.asteroid_link);
       //this.updateMinerFrame(ent);
     }
+    if (selected === TYPE_LASER) {
+      ent.last_fire_time = 0;
+    }
     this.money -= cost;
 
     this.pullSupply(ent);
@@ -1273,6 +1339,13 @@ function drawMap(dt) {
     //     text: `${elem.supply}`,
     //   });
     // }
+    if (elem.last_fire_time) {
+      if (elem.last_fire_time > tick_counter - PLAYER_LASER_TIME) {
+        let target = elem.last_fire_target;
+        ui.drawLine(elem.x, elem.y, target.x, target.y, Z.PLAYER_LASERS, 1.5, 0.5, pico8.colors[12]);
+      }
+    }
+
     if (!elem.dead_asteroid) {
       let elem_pos = {
         x: floor(elem.x - elem.r),
@@ -1317,10 +1390,11 @@ function drawMap(dt) {
       bar_y -= BUILDING_H;
     }
     if (hp_max && hp < hp_max) {
+      // draw health bars
       let x = elem.x - floor(BUILDING_W/2);
       let y = bar_y;
       let p = hp/hp_max;
-      ui.drawRect(x, y, x + BUILDING_W, y + BUILDING_H, Z.BUILDING_BAR, pico8.colors[p < 0.1 ? 8 : 2]);
+      ui.drawRect(x, y, x + BUILDING_W, y + BUILDING_H, Z.BUILDING_BAR, pico8.colors[p < 0.2 ? 8 : 2]);
       ui.drawRect(x+1, y+1, x+1 + (BUILDING_W-2) * p, y + BUILDING_H - 1,
         Z.BUILDING_BAR, pico8.colors[11]);
     }
@@ -1351,10 +1425,20 @@ function drawMap(dt) {
   }
   for (let ii = 0; ii < enemies.length; ++ii) {
     let enemy = enemies[ii];
-    sprite_space.draw(enemy);
-    if (enemy.last_fire_time > tick_counter - LASER_TIME) {
-      let target = enemy.last_fire_target;
-      ui.drawLine(enemy.x, enemy.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[8]);
+    if (enemy.x < viewx0 || enemy.x > viewx1 ||
+      enemy.y < viewy0 || enemy.y > viewy1
+    ) {
+      sprite_space.draw({
+        ...enemy,
+        x: clamp(enemy.x, viewx0, viewx1),
+        y: clamp(enemy.y, viewy0, viewy1),
+      });
+    } else {
+      sprite_space.draw(enemy);
+      if (enemy.last_fire_time > tick_counter - LASER_TIME) {
+        let target = enemy.last_fire_target;
+        ui.drawLine(enemy.x, enemy.y, target.x, target.y, Z.ENEMY_LASERS, 1.5, 0.5, pico8.colors[8]);
+      }
     }
   }
 
@@ -1566,6 +1650,39 @@ function drawHUD() {
         y += line_height;
       }
 
+      if (ent_type.damage) {
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text: `Damage: ${ent_type.damage}`,
+        });
+        y += line_height;
+      }
+      if (ent_type.fire_time) {
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text: `Shots every 10 seconds: ${10000 / ent_type.fire_time}`,
+        });
+        y += line_height;
+      }
+      if (ent_type.supply_per_shot) {
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text: `Shots per Supply: ${1 / ent_type.supply_per_shot}`,
+        });
+        y += line_height;
+      }
+      if (ent_type.supply_max) {
+        font.draw({
+          color: pico8.font_colors[0],
+          x, y,
+          text: `Max Supply: ${ent_type.supply_max}`,
+        });
+        y += line_height;
+      }
+
       if (game.selected) {
         // details on build option
         y += 4;
@@ -1578,7 +1695,7 @@ function drawHUD() {
 
       } else {
         // details on real ent
-        y += 4;
+        y += 3;
 
         if (selected_ent.building) {
           font.draw({
@@ -1693,6 +1810,9 @@ function statePlay(dt) {
   }
   drawHUD();
   drawMap(dt);
+  if (game.selected_ent && input.click()) {
+    game.selected_ent = null;
+  }
 }
 
 export function main() {

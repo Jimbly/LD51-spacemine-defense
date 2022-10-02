@@ -656,6 +656,7 @@ class Game {
   }
 
   pullSupply(ent) {
+    assert(!ent.supply_enroute);
     // find supply to send
     let source = this.findSupplySource(ent);
     if (!source) {
@@ -703,9 +704,7 @@ class Game {
         let next_id = this.nextStep(source.id, target.id);
         if (!next_id) {
           // no longer has a link, I guess, just delete itself
-          if (engine.DEBUG) {
-            assert(false); // clean up elsewhere?
-          }
+          target.supply_enroute = false;
           return true;
         }
         packet.next = next = map[next_id];
@@ -909,6 +908,9 @@ class Game {
       ent.last_fire_target = target;
       ent.supply = max(0, ent.supply - ent_type.supply_per_shot);
       this.damageEnemy(target, ent_type.damage);
+      if (ent.supply <= ent.supply_max - 1 && !ent.supply_enroute) {
+        this.pullSupply(ent);
+      }
     }
   }
 

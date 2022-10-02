@@ -187,7 +187,7 @@ const ent_types = {
     frame_empty: FRAME_FACTORY_EMPTY,
     label: 'Factory',
     desc: [`Generates ${FACTORY_SUPPLY} Supply every 10 seconds`],
-    cost: 800,
+    cost: 750,
     cost_supply: 7,
     r: RADIUS_DEFAULT,
     supply_prod: FACTORY_SUPPLY, // every 10 seconds
@@ -235,8 +235,8 @@ const ent_types = {
     frame_building: FRAME_LASER_BUILDING,
     frame_nosupply: FRAME_LASER_EMPTY,
     label: 'Laser',
-    cost: 500,
-    cost_supply: 5,
+    cost: 400,
+    cost_supply: 4,
     supply_max: 10,
     range_sq: 50*50,
     fire_time: 500,
@@ -290,7 +290,7 @@ const buttons = [
 
 const enemy_types = [
   {
-    wave_size: 20,
+    wave_size: 16,
     name: 'Fighters',
     w: SPRITE_W,
     h: SPRITE_W,
@@ -308,9 +308,11 @@ const enemy_types = [
     fire_time_rand: 200,
     laser_time: LASER_TIME,
     alert_sound: 'alert1',
+    wave_mult: 1,
+    wave_max: 40,
   },
   {
-    wave_size: 4,
+    wave_size: 3,
     name: 'Marauders',
     w: SPRITE_W,
     h: SPRITE_W,
@@ -328,13 +330,15 @@ const enemy_types = [
     fire_time_rand: 200,
     laser_time: BIG_LASER_TIME,
     alert_sound: 'alert2',
+    wave_mult: 0.25,
+    wave_max: 8,
   },
 ];
 
 const level_defs = {
   intro: {
     num_asteroids: 20,
-    display_name: '1/2 Intro', seed: 'test2',
+    display_name: '1/3 Intro', seed: 'test1',
     subtitle: 'No danger, learn the basics',
     danger_pattern: [0],
     danger_start: 6*3,
@@ -343,19 +347,25 @@ const level_defs = {
     ore_range: 1000,
   },
   med: {
-    num_asteroids: 100,
-    display_name: '2/2 Defense', seed: '1234',
+    num_asteroids: 80,
+    display_name: '2/3 Defense', seed: '1234',
     subtitle: 'TL;DR: Boss was wrong',
-    danger_pattern: [0,0,0,1,0,0,1],
+    danger_pattern: [0,0,0,0,1,0,0,1],
     danger_start: 6,
-    danger: 3,
+    danger: 6,
     ore_base: 500,
     ore_range: 1000,
   },
-  // hard: {
-  //   num_asteroids: 100,
-  //   display_name: 'Hard', seed: '3',
-  // },
+  hard: {
+    num_asteroids: 100,
+    display_name: '3/3 Hard', seed: '5678',
+    subtitle: 'Is this even winnable?',
+    danger_pattern: [0,0,0,1,0,1],
+    danger_start: 6,
+    danger: 3,
+    ore_base: 300,
+    ore_range: 1500,
+  },
 };
 let level_list = Object.keys(level_defs).map((key) => {
   let def = level_defs[key];
@@ -501,6 +511,7 @@ class Game {
         x, y,
         rot: rand.random() * PI * 2,
         value: ld.ore_base + rand.range(ld.ore_range),
+        vis_seed: random(),
       });
       total_value += ent.value;
       this.updateAsteroidSize(ent);
@@ -512,14 +523,16 @@ class Game {
     this.selected = null;
     this.tick_counter = 0;
     this.decaseconds = 0;
+    this.danger_countdown = 0;
     this.paused = true;
+    this.wave_index = 0;
     this.selected_ent = null;
     if (engine.DEBUG) {
       // this.game_over = true;
-      this.paused = false;
-      this.selected = TYPE_MINER;
+      // this.paused = false;
+      // this.selected = TYPE_MINER;
       // this.selected_ent = factory;
-      this.money = 20000;
+      // this.money = 20000;
     }
   }
 
@@ -1009,8 +1022,12 @@ class Game {
       enemies[ii].target_id = null;
     }
 
-    if (this.decaseconds >= this.ld.danger_start && this.decaseconds % this.ld.danger === 0) {
-      this.spawn_wave = true;
+    if (this.decaseconds >= this.ld.danger_start) {
+      if (this.danger_countdown === 0) {
+        this.danger_countdown = this.ld.danger;
+        this.spawn_wave = true;
+      }
+      --this.danger_countdown;
     }
 
     if (!this.submitting_score) {
@@ -1035,7 +1052,8 @@ class Game {
     let enemy_type = ld.danger_pattern[idx % ld.danger_pattern.length];
     let et = enemy_types[enemy_type];
     ui.playUISound(et.alert_sound);
-    let count = et.wave_size;
+    let count = min(round(et.wave_size + this.wave_index * et.wave_mult), et.wave_max);
+    ++this.wave_index;
     let dist = game_width * 0.75; // / 4;
     for (let ii = 0; ii < count; ++ii) {
       direction += (this.rand.random() - 0.5) * 0.5;
@@ -2624,7 +2642,7 @@ export function main() {
   stateTitleInit();
   engine.setState(stateTitle);
   if (engine.DEBUG) {
-    playInit(0, false);
+    playInit(1, false);
     engine.setState(statePlay);
     //levelSelectInit();
   }

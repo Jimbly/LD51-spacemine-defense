@@ -27,8 +27,7 @@ X New asteroid if no other gfx
 X button GFX
 * waves ramp up in difficulty
 * stretch:
-  * only do N search for targets each frame
-  * scrolling background texture
+  X scrolling background texture
   * particles
   * art pass
   * more units: (need to rebalance level choices)
@@ -36,6 +35,7 @@ X button GFX
     * boosters
     * more enemies / weapons
   * random easy/med/hard level select
+  * only do N search for targets each frame
 
 The 10 Second Space Game
 X Field of asteroids

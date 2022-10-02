@@ -155,6 +155,9 @@ function init() {
   sprites.border = createSprite({
     name: 'border',
   });
+  sprites.starfield = createSprite({
+    name: 'starfield',
+  });
   ui.loadUISprite('card_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('reticule_panel', [3, 2, 3], [3, 2, 3]);
   ui.loadUISprite('card_button', [3, 2, 3], [CARD_H]);
@@ -1758,6 +1761,14 @@ function drawMap(dt) {
   }
 
   drawGhost(viewx0, viewy0, viewx1, viewy1);
+
+  let uv_slide = engine.getFrameTimestamp() * 0.000001;
+  sprites.starfield.draw({
+    x: 0, y: 0, w: 1024, h: 1024,
+    uvs: [uv_slide*0.3,uv_slide,2+uv_slide*0.3,2+uv_slide],
+    z: Z.BACKGROUND,
+    color: [1,1,1,0.4],
+  });
 }
 
 const CARD_LABEL_Y = CARD_Y + CARD_ICON_X * 2 + CARD_ICON_W;
